@@ -12,6 +12,30 @@ from scipy.misc import logsumexp
 import h5py
 
 
+K = 5
+#K = 10
+prob_const = {
+  "logP(h)" : math.log(1. / K),
+  "logP(err)"  : math.log(0.01),
+  "logP(err')" : math.log(1 - 0.01),
+} 
+def score(A, H):
+  M_,N_ = A.shape
+  logP = 0.0
+  M  = np.zeros((M_, K))
+  MM = np.zeros((M_, K))
+  S  = np.zeros((M_, K))
+  for i in xrange(M_):
+    S_i = np.zeros(K)
+    for k in xrange(K):
+      M[i,k] = sum(np.abs(A[i,np.sign(A[i,:]) == H[k,:]]))
+      MM[i,k] = sum(np.abs(A[i,np.sign(A[i,:]) == -H[k,:]]))
+      S[i,k] = (prob_const["logP(h)"] +
+        prob_const["logP(err')"] * M[i,k] + 
+        prob_const["logP(err)"] * MM[i,k])
+    logP += logsumexp(S[i,:])
+  return logP, M, MM, S
+
 def mkdir_p(path):
   if not os.path.isdir(path):
     os.makedirs(path)
@@ -48,7 +72,7 @@ def make_inputs(bam_path, vcf_path, scratch_path):
   snp_bcode_counts_map = defaultdict(lambda:defaultdict(Counter))
   seen_set = set()
   for (i, (ctg, pos)) in enumerate(sorted(var_map)):
-    if i % 10 == 0:
+    if i % 100 == 0:
       print 'num snps', i
       #if i > 400:
       #  break
@@ -193,72 +217,76 @@ def load_phase_inputs(h5_path):
 def phase(scratch_path):
   h5_path = os.path.join(scratch_path, 'inputs.h5')
   snps, bcodes, A = load_phase_inputs(h5_path)
-  idx_snp_map = dict(list(enumerate(snps)))
-  idx_rid_map = dict(list(enumerate(bcodes)))
-  snp_idx_map = dict(map(lambda(k,v): (v,k), idx_snp_map.items()))
-  rid_idx_map = dict(map(lambda(k,v): (v,k), idx_rid_map.items()))
 
   print 'loaded {} X {}'.format(len(bcodes), len(snps))
 
-  M, N = A.shape
-  K = 10
-  H = np.ones((K, N))
-  prob_map = {
-    "logP(h)" : math.log(1. / K),
-    "logP(err)"  : math.log(0.01),
-    "logP(err')" : math.log(1 - 0.01),
-  } 
+  M_, N_ = A.shape
 
-  S = np.zeros((M, K))
-  def score(A, H, i_vec=None, k_vec=None):
-    logP = 0.0
-    k_iter = xrange(K) if k_vec == None else k_vec
-    # FIXME funky hack for nil values of i_vec
-    i_iter = xrange(M) if i_vec == None else i_vec
-    for i in i_iter:
-      #for k in k_iter:
-      for k in xrange(K):
-        matches = sum(np.abs(A[i,np.sign(A[i,:]) == H[k,:]]))
-        mismatches = sum(np.abs(A[i,np.sign(A[i,:]) == -H[k,:]]))
-        S[i,k] = ( prob_map["logP(h)"] +
-          prob_map["logP(err')"] * matches + 
-          prob_map["logP(err)"] * mismatches
-        )
-      logP += logsumexp(S[i,:])
-    return logP
+  # hidden haplotypes
+  H = np.ones((K, N_))
 
-  logP = score(A, H)
+  # initialize and save intermediate values for fast vectorized
+  # computation
+  logP, M, MM, S = score(A, H)
   logP_min = logP
   H_min = np.array(H)
-
   print 'initial logP', logP
 
   for iteration in xrange(12):
     print 'iteration', iteration
-    for k in xrange(K):
-      print '  - hap {}, logP: {}'.format(k, logP)
-      for j in xrange(N):
-        pp = H[k,j]
-        sel_rids = list(np.nonzero(A[:,j])[0])
-        sel_hap = [k]
-        logP_p = score(A, H, sel_rids, sel_hap)
-        H[k,j] *= -1
-        logP_n = score(A, H, sel_rids, sel_hap)
-        delta_logP = -logP_p + logP_n
+    for k_p in xrange(K):
+      print '  - hap {}, logP: {}'.format(k_p, logP)
+      for j_p in xrange(N_):
+
+        # toggle matches/mismatches at locus j for hap k
+        pp = H[k_p, j_p]
+        sel_rids = np.nonzero(A[:,j_p])[0]
+
+        m = np.abs((pp * A[sel_rids, j_p]).clip(min=0))
+        mm = np.abs((pp * A[sel_rids,j_p]).clip(max=0))
+        M_k  =  M[sel_rids, k_p]
+        MM_k = MM[sel_rids, k_p]
+        M_k_p  =  M_k - m + mm
+        MM_k_p = MM_k + m - mm
+        # determine updated read scores for hap k
+        S_k_p = (
+          prob_const["logP(h)"] +
+          prob_const["logP(err')"] * M_k_p + 
+          prob_const["logP(err)"] * MM_k_p
+        )
+        # compute base logP
+        logP_p_vec = np.apply_along_axis(
+          logsumexp,
+          1,
+          S[sel_rids,:],
+        )
+        # compute updated logP using updated read scores for hap k
+        sel_ks = np.ones(K, dtype=bool)
+        sel_ks[k_p] = False
+        logP_n_vec = np.apply_along_axis(
+          logsumexp,
+          1,
+          np.hstack([S_k_p[:,None], S[np.ix_(sel_rids,sel_ks)]]),
+        )
+        delta_logP = sum(logP_n_vec) - sum(logP_p_vec)
         P = min(1, np.exp(delta_logP))
+        #print 'delta_logP', delta_logP
+        #die
 
-        matches = sum(np.abs(A[np.sign(A[:,j]) == H[k,j],j]))
-        mismatches = sum(np.abs(A[np.sign(A[:,j]) == -H[k,j],j]))
-
-        #print 'prev matches', len(matches)
-        #print 'prev mismatches', len(mismatches)
-        #print 'delta log P', delta_logP
         if P > random.random():
           #print '  - accept', delta_logP
           logP += delta_logP
+          # toggle haps
+          H[k_p,j_p] *= -1
+          # update state
+          M[sel_rids,k_p]  = M_k_p
+          MM[sel_rids,k_p] = MM_k_p
+          S[sel_rids,k_p] = S_k_p
         else:
+          pass
           #print '  - reject'
-          H[k,j] *= -1
+
+        # save new minimum
         if logP > logP_min:
           logP_min = logP
           H_min = np.array(H)
@@ -279,33 +307,20 @@ def make_outputs(scratch_path):
   h5f = h5py.File(phaseh5_path, 'r')
   H = np.array(h5f['H'])
   h5f.close()
-  #print 'loaded', H
-  M, N = A.shape
-  K = 10
-  prob_map = {
-    "logP(h)" : math.log(1. / K),
-    "logP(err)"  : math.log(0.01),
-    "logP(err')" : math.log(1 - 0.01),
-  } 
-  idx_snp_map = dict(list(enumerate(snps)))
+  M_, N_ = A.shape
   idx_rid_map = dict(list(enumerate(bcodes)))
 
   # determine read assignment to haplotypes
-  W = np.empty((M,))
+  W = np.empty((M_,))
   W.fill(-1)
-  for i in xrange(M):
-    S = np.zeros((K,))
-    for k in xrange(K):
-      matches = sum(np.abs(A[i,np.sign(A[i,:]) == H[k,:]]))
-      mismatches = sum(np.abs(A[i,np.sign(A[i,:]) == -H[k,:]]))
-      S[k] = ( prob_map["logP(h)"] +
-        prob_map["logP(err')"] * matches + 
-        prob_map["logP(err)"] * mismatches
-      )
-    # renormalize
-    S -= logsumexp(S)
-    assn = np.argmax(S)
-    if np.exp(S[assn]) > 0.8:
+
+  logP, M, MM, S = score(A, H)
+  for i in xrange(M_):
+    # renormalize across K haps for this read
+    S[i,:] -= logsumexp(S[i,:])
+    # only assign if majority rule
+    assn = np.argmax(S[i,:])
+    if np.exp(S[i,assn]) > 0.8:
       W[i] = assn
 
   outdir_path = os.path.join(scratch_path, 'bins')
@@ -318,7 +333,8 @@ def make_outputs(scratch_path):
         rid = int(rid)
         bcode = idx_rid_map[rid]
         fout.write('{}\n'.format(bcode))
-  print 'unassigned', sum((W == -1))
+  print 'assigned barcodes', sum((W != -1))
+  print 'unassigned barcodes', sum((W == -1))
     
 #=========================================================================
 # main
@@ -341,6 +357,7 @@ def main(argv):
     'mkoutputs',
   ]
 
+  mkdir_p(scratch_path)
   if cmd == 'mkinputs':
     make_inputs(bam_path, vcf_path, scratch_path)
   elif cmd == 'phase':
