@@ -10,6 +10,7 @@ import h5py
 
 import util
 
+(alpha, beta) = (1.0, 1.0)
 (alpha, beta) = (1.0, 0.1)
 (alpha, beta) = (1.0, 0.01)
 K = 5
@@ -46,9 +47,9 @@ def score(A, H, C):
 
   # score assigned reads in each cluser by integrating over thetas
   for k in xrange(K):
+    C_i = (C == k)
+    A_k = A[C_i,:]
     for j in xrange(N_):
-      C_i = (C == k)
-      A_k = A[C_i,:]
       M[k,j]  = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == H[k, j], j]))
       MM[k,j] = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == -H[k, j], j]))
       G[k,j,:] = score_beta_site(M[k,j], MM[k,j])
@@ -122,6 +123,7 @@ def sample_haplotype(M, MM, G, H_p, A_k, seed=None):
       MM_c = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == -H[j], j]))
       assert M[j]  == M_c
       assert MM[j] == MM_c
+      assert (G[j,:] == score_beta_site(M_c, MM_c)).all()
 
   assert_hap_state(H_p)
   # get flipped gammas for all sites
@@ -134,17 +136,16 @@ def sample_haplotype(M, MM, G, H_p, A_k, seed=None):
     0,
     np.vstack((logP_p, logP_n)),
   )
-  #print 'H_p', H_p
-  #print 'A_k', A_k
-  #print 'flip prob', np.exp(logP_flip)
   # choose bits to flip
-  flip_mask = np.random.random(N) < np.exp(logP_flip)
+  p = np.random.random(N)
+  flip_mask = p < np.exp(logP_flip)
   # flip selected bits for newly sampled haplotype
   H_n = np.array(H_p)
   H_n[flip_mask] = -H_p[flip_mask]
   # update sufficient statistics for loci that flipped
   fm = flip_mask
-  MM[fm], M[fm], G[:,0], G[:,1] = M[fm], MM[fm], G[:,1], G[:,0]
+  MM[fm], M[fm] = M[fm], MM[fm]
+  G[fm,:] = G_n[fm,:]
   assert_hap_state(H_n)
 
   return H_n
@@ -165,7 +166,7 @@ def phase(scratch_path):
   logP, M, MM, G, S = score(A, H, C)
 
   # make sure intermediate tables are all consistent
-  def assert_state(A, H, C, M, MM):
+  def assert_state(A, H, C, M, MM, G):
     fail = False
     for k in xrange(K):
       C_i = (C == k)
@@ -175,14 +176,20 @@ def phase(scratch_path):
         MM_c = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == -H[k, j], j]))
         assert M[k,j]  == M_c
         assert MM[k,j] == MM_c
+        assert (G[k,j,:] == score_beta_site(M_c, MM_c)).all()
 
-  assert_state(A, H, C, M, MM)
+  assert_state(A, H, C, M, MM, G)
 
   # sample initial haplotypes
   for k in xrange(K):
     A_k = A[(C == k),:]
     H[k,:] = sample_haplotype(M[k,:], MM[k,:], G[k,:,:], H[k,:], A_k)
 
+  # compute seed gammas for empty hap
+  G_seed = np.zeros((N_, 3))
+  G_seed[:,0], G_seed[:,1], G_seed[:,2] = \
+    score_beta_site(np.zeros(N_), np.zeros(N_))
+ 
   num_iterations = 200
   num_samples = 50.
   H_samples = np.zeros((num_samples, K, N_))
@@ -229,6 +236,7 @@ def phase(scratch_path):
         # if hap k is currently empty, then resample under this seed r_i
         if not (C == k).any():
           H[k,:] = sample_haplotype_seed(r_i)
+          G[k,:,:] = np.array(G_seed)
         if k == k_p:
           m, mm = get_hap_counts(r_i, H_p)
           scores[k] = score_read(m, mm, M_p, MM_p)
@@ -267,7 +275,7 @@ def phase(scratch_path):
         A_k = A[(C == k_n),:]
         H[k_n,:] = sample_haplotype(M[k_n,:], MM[k_n,:], G[k_n,:,:], H[k_n,:], A_k)
 
-  assert_state(A, H, C, M, MM)
+  assert_state(A, H, C, M, MM, G)
 
   print 'finished sampling'
   # convert ref from -1 to 0 so can compute sampled probability
