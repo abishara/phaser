@@ -1,0 +1,6 @@
+numpy
+click
+h5py
+scipy
+pysam
+pyvcf

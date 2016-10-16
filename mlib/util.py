@@ -4,7 +4,7 @@ import vcf
 from collections import defaultdict, Counter
 import numpy as np
 import h5py
-import cPickle as pickle
+#import cPickle as pickle
 
 #--------------------------------------------------------------------------
 # sys
@@ -28,7 +28,7 @@ def write_pickle(path, obj):
 #--------------------------------------------------------------------------
 
 def get_barcode(read):
-  filt_list = filter(lambda(k, v): k == 'BC', read.tags)
+  filt_list = filter(lambda k, v: k == 'BC', read.tags)
   if filt_list == []: 
     return None
   else:
@@ -61,8 +61,8 @@ def get_variants(vcf_path):
 
 def load_phase_inputs(h5_path):
   h5f = h5py.File(h5_path, 'r')
-  snps = map(lambda(k,v): (str(k),int(v)), h5f['snps'])
-  bcodes = map(lambda(k): str(k), h5f['bcodes'])
+  snps = map(lambda k,v: (str(k),int(v)), h5f['snps'])
+  bcodes = map(lambda k: str(k), h5f['bcodes'])
   A = np.array(h5f['genotypes'])
   h5f.close()
   return snps, bcodes, A
@@ -76,7 +76,7 @@ def make_inputs(bam_path, vcf_path, scratch_path):
   seen_set = set()
   for (i, (ctg, pos)) in enumerate(sorted(var_map)):
     if i % 500 == 0:
-      print 'num snps', i
+      print('num snps', i)
       #if i > 400:
       #  break
       break
@@ -152,8 +152,8 @@ def make_inputs(bam_path, vcf_path, scratch_path):
   # create input matrix
   idx_snp_map = dict(list(enumerate(pass_snps)))
   idx_rid_map = dict(list(enumerate(pass_bcodes)))
-  snp_idx_map = dict(map(lambda(k,v): (v,k), idx_snp_map.items()))
-  rid_idx_map = dict(map(lambda(k,v): (v,k), idx_rid_map.items()))
+  snp_idx_map = dict(map(lambda k,v: (v,k), idx_snp_map.items()))
+  rid_idx_map = dict(map(lambda k,v: (v,k), idx_rid_map.items()))
   M = len(rid_idx_map)
   N = len(snp_idx_map)
   A = np.zeros((M, N))
@@ -176,8 +176,8 @@ def make_inputs(bam_path, vcf_path, scratch_path):
   pass_snps_vec = np.array(pass_snps)
   pass_bcodes_vec = np.array(pass_bcodes)
 
-  print '{} bcodes X {} snps'.format(M, N)
-  print 'total genotype entries {}'.format(np.sum(np.abs(A)))
+  print('{} bcodes X {} snps'.format(M, N))
+  print('total genotype entries {}'.format(np.sum(np.abs(A))))
 
   # toy example
   pass_snps = [

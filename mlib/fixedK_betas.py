@@ -8,7 +8,7 @@ from scipy.special import gammaln
 from collections import defaultdict, Counter
 import h5py
 
-import util
+import mlib.util
 
 (alpha, beta) = (1.0, 0.1)
 (alpha, beta) = (1.0, 0.01)
@@ -153,7 +153,7 @@ def phase(scratch_path):
   h5_path = os.path.join(scratch_path, 'inputs.h5')
   snps, bcodes, A = util.load_phase_inputs(h5_path)
 
-  print 'loaded {} X {}'.format(len(bcodes), len(snps))
+  print('loaded {} X {}'.format(len(bcodes), len(snps)))
 
   M_, N_ = A.shape
 
@@ -187,13 +187,13 @@ def phase(scratch_path):
   num_samples = 50.
   H_samples = np.zeros((num_samples, K, N_))
   for iteration in xrange(num_iterations):
-    print 'iteration', iteration
+    print('iteration', iteration)
 
     # save sample
     i = iteration % 50
     H_samples[i,:,:] = H
-    print 'H', H
-    print 'C', C
+    print('H', H)
+    print('C', C)
 
     for i_p in xrange(M_):
 
@@ -269,11 +269,11 @@ def phase(scratch_path):
 
   assert_state(A, H, C, M, MM)
 
-  print 'finished sampling'
+  print('finished sampling')
   # convert ref from -1 to 0 so can compute sampled probability
   H_samples[H_samples == -1] = 0
   p_H = np.sum(H_samples,axis=0) / num_samples
-  print p_H
+  print(p_H)
 
   h5_path = os.path.join(scratch_path, 'phased.h5')
   h5f = h5py.File(h5_path, 'w')
@@ -290,7 +290,7 @@ def make_outputs(scratch_path):
   M_, N_ = A.shape
   idx_rid_map = dict(list(enumerate(bcodes)))
 
-  print 'loaded {} X {}'.format(len(bcodes), len(snps))
+  print('loaded {} X {}'.format(len(bcodes), len(snps)))
 
   # determine read assignment to haplotypes
   W = np.empty((M_,))
@@ -330,12 +330,12 @@ def make_outputs(scratch_path):
           mmgt += 1
         else:
           mgt += 1
-      print 'k', k
-      print '  more mm', mmgt
-      print '  more m', mgt
-      print '  diffs', diffs[:10]
-      print '  end diffs', diffs[-10:]
-      print
+      print('k', k)
+      print('  more mm', mmgt)
+      print('  more m', mgt)
+      print('  diffs', diffs[:10])
+      print('  end diffs', diffs[-10:])
+      print()
 
     bcode_set = set()
     with open(out_path, 'w') as fout:
@@ -348,6 +348,6 @@ def make_outputs(scratch_path):
 
   out_path = os.path.join(scratch_path, 'bins', 'clusters.p')
   write_pickle(out_path, clusters_map)
-  print 'assigned barcodes', sum((W != -1))
-  print 'unassigned barcodes', sum((W == -1))
+  print('assigned barcodes', sum((W != -1)))
+  print('unassigned barcodes', sum((W == -1)))
 
