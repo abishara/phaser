@@ -201,6 +201,30 @@ def make_inputs(bam_path, vcf_path, scratch_path):
   [1,1,1,-1,1],
   [1,1,1,1,-1],
   ])
+  pass_bcodes = [
+    'bcode0',
+    'bcode1',
+    'bcode2',
+    'bcode3',
+    'bcode4',
+    'bcode5',
+    'bcode6',
+    'bcode7',
+    'bcode8',
+    'bcode9',
+  ]
+  A = np.array([
+  [-1,1,1,1,1],
+  [1,-1,1,1,1],
+  [1,1,-1,1,1],
+  [1,1,1,-1,1],
+  [1,1,1,1,-1],
+  [-1,1,1,1,1],
+  [1,-1,1,1,1],
+  [1,1,-1,1,1],
+  [1,1,1,-1,1],
+  [1,1,1,1,-1],
+  ])
 
 
   h5_path = os.path.join(scratch_path, 'inputs.h5')
