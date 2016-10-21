@@ -212,6 +212,6 @@ def make_outputs(scratch_path):
     clusters_map[k] = bcode_set
 
   out_path = os.path.join(scratch_path, 'bins', 'clusters.p')
-  write_pickle(out_path, clusters_map)
+  util.write_pickle(out_path, clusters_map)
   print 'assigned barcodes', sum((W != -1))
   print 'unassigned barcodes', sum((W == -1))

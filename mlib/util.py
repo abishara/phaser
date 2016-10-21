@@ -28,7 +28,7 @@ def write_pickle(path, obj):
 #--------------------------------------------------------------------------
 
 def get_barcode(read):
-  filt_list = filter(lambda(k, v): k == 'BC', read.tags)
+  filt_list = filter(lambda(k, v): k in 'BC', read.tags)
   if filt_list == []: 
     return None
   else:
@@ -79,7 +79,7 @@ def make_inputs(bam_path, vcf_path, scratch_path):
       print 'num snps', i
       #if i > 400:
       #  break
-      break
+      #break
     bbegin = pos
     eend = pos + 1
     for pcol in bam_fin.pileup(ctg, bbegin, eend):
@@ -179,52 +179,52 @@ def make_inputs(bam_path, vcf_path, scratch_path):
   print '{} bcodes X {} snps'.format(M, N)
   print 'total genotype entries {}'.format(np.sum(np.abs(A)))
 
-  # toy example
-  pass_snps = [
-    ('snp0',0),
-    ('snp1',0),
-    ('snp2',0),
-    ('snp3',0),
-    ('snp4',0),
-  ]
-  pass_bcodes = [
-    'bcode0',
-    'bcode1',
-    'bcode2',
-    'bcode3',
-    'bcode4',
-  ]
-  A = np.array([
-  [-1,1,1,1,1],
-  [1,-1,1,1,1],
-  [1,1,-1,1,1],
-  [1,1,1,-1,1],
-  [1,1,1,1,-1],
-  ])
-  pass_bcodes = [
-    'bcode0',
-    'bcode1',
-    'bcode2',
-    'bcode3',
-    'bcode4',
-    'bcode5',
-    'bcode6',
-    'bcode7',
-    'bcode8',
-    'bcode9',
-  ]
-  A = np.array([
-  [-1,1,1,1,1],
-  [1,-1,1,1,1],
-  [1,1,-1,1,1],
-  [1,1,1,-1,1],
-  [1,1,1,1,-1],
-  [-1,1,1,1,1],
-  [1,-1,1,1,1],
-  [1,1,-1,1,1],
-  [1,1,1,-1,1],
-  [1,1,1,1,-1],
-  ])
+  ## toy example
+  #pass_snps = [
+  #  ('snp0',0),
+  #  ('snp1',0),
+  #  ('snp2',0),
+  #  ('snp3',0),
+  #  ('snp4',0),
+  #]
+  #pass_bcodes = [
+  #  'bcode0',
+  #  'bcode1',
+  #  'bcode2',
+  #  'bcode3',
+  #  'bcode4',
+  #]
+  #A = np.array([
+  #[-1,1,1,1,1],
+  #[1,-1,1,1,1],
+  #[1,1,-1,1,1],
+  #[1,1,1,-1,1],
+  #[1,1,1,1,-1],
+  #])
+  #pass_bcodes = [
+  #  'bcode0',
+  #  'bcode1',
+  #  'bcode2',
+  #  'bcode3',
+  #  'bcode4',
+  #  'bcode5',
+  #  'bcode6',
+  #  'bcode7',
+  #  'bcode8',
+  #  'bcode9',
+  #]
+  #A = np.array([
+  #[-1,1,1,1,1],
+  #[1,-1,1,1,1],
+  #[1,1,-1,1,1],
+  #[1,1,1,-1,1],
+  #[1,1,1,1,-1],
+  #[-1,1,1,1,1],
+  #[1,-1,1,1,1],
+  #[1,1,-1,1,1],
+  #[1,1,1,-1,1],
+  #[1,1,1,1,-1],
+  #])
 
 
   h5_path = os.path.join(scratch_path, 'inputs.h5')
