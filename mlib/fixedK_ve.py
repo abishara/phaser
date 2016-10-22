@@ -148,7 +148,6 @@ def make_outputs(scratch_path):
   logP, M, MM, S = score(A, H)
   S_n = np.zeros((M_, K))
   for i in xrange(M_):
-    bcode = idx_rid_map[i]
     # renormalize across K haps for this read
     S_n[i,:] = S[i,:] - logsumexp(S[i,:])
     # only assign if majority rule

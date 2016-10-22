@@ -125,7 +125,7 @@ def sample_haplotype(M, MM, G, H_p, A_k, seed=None):
       assert MM[j] == MM_c
       assert (G[j,:] == score_beta_site(M_c, MM_c)).all()
 
-  assert_hap_state(H_p)
+  #assert_hap_state(H_p)
   # get flipped gammas for all sites
   G_n[:,0], G_n[:,1], G_n[:,2] = score_beta_site(MM, M)
   logP_p = G[:,0] + G[:,1]
@@ -146,7 +146,7 @@ def sample_haplotype(M, MM, G, H_p, A_k, seed=None):
   fm = flip_mask
   MM[fm], M[fm] = M[fm], MM[fm]
   G[fm,:] = G_n[fm,:]
-  assert_hap_state(H_n)
+  #assert_hap_state(H_n)
 
   return H_n
 
@@ -159,7 +159,7 @@ def phase(scratch_path):
   M_, N_ = A.shape
 
   # hidden haplotypes
-  H, C  = get_initial_state(A)
+  H, C = get_initial_state(A)
 
   # initialize and save intermediate values for fast vectorized
   # computation
@@ -190,17 +190,35 @@ def phase(scratch_path):
   G_seed[:,0], G_seed[:,1], G_seed[:,2] = \
     score_beta_site(np.zeros(N_), np.zeros(N_))
  
-  num_iterations = 200
-  num_samples = 50.
+  num_iterations = 400
+  num_samples = 50
+  sample_step = 1
+
+  #num_iterations = 10000
+  #num_samples = 50
+  #sample_step = 100
+
+  assert sample_step * num_samples < num_iterations, \
+    "{} iterations is not enough for {} samples with step {}".format(
+      num_iterations,
+      num_samples,
+      sample_step,
+    )
+
+  sidx = 0
   H_samples = np.zeros((num_samples, K, N_))
+  C_samples = np.zeros((num_samples, M_))
   for iteration in xrange(num_iterations):
-    print 'iteration', iteration
+    if iteration % 100 == 0:
+      print 'iteration', iteration
 
     # save sample
-    i = iteration % 50
-    H_samples[i,:,:] = H
-    print 'H', H
-    print 'C', C
+    if iteration % sample_step == 0:
+      H_samples[sidx,:,:] = H
+      C_samples[sidx,:] = C
+      sidx = (sidx + 1) % num_samples
+    #print 'H', H
+    #print 'C', C
 
     for i_p in xrange(M_):
 
@@ -281,11 +299,21 @@ def phase(scratch_path):
   # convert ref from -1 to 0 so can compute sampled probability
   H_samples[H_samples == -1] = 0
   p_H = np.sum(H_samples,axis=0) / num_samples
-  print p_H
+  p_C = np.zeros((M_,K))
+  for k in xrange(K):
+    p_C[:,k] = 1.* np.sum(C_samples == k,axis=0) / num_samples
+  #for i in xrange(num_samples):
+  #  print 'H sample'
+  #  print H_samples[i,:,:]
+  #print C_samples
+
+  #print p_H
+  #print p_C
 
   h5_path = os.path.join(scratch_path, 'phased.h5')
   h5f = h5py.File(h5_path, 'w')
-  h5f.create_dataset('H', data=H)
+  h5f.create_dataset('p_H', data=p_H)
+  h5f.create_dataset('p_C', data=p_C)
   h5f.close()
 
 def make_outputs(scratch_path):
@@ -293,18 +321,29 @@ def make_outputs(scratch_path):
   phaseh5_path = os.path.join(scratch_path, 'phased.h5')
   snps, bcodes, A = util.load_phase_inputs(inputsh5_path)
   h5f = h5py.File(phaseh5_path, 'r')
-  H = np.array(h5f['H'])
+  p_H = np.array(h5f['p_H'])
+  p_C = np.array(h5f['p_C'])
   h5f.close()
   M_, N_ = A.shape
   idx_rid_map = dict(list(enumerate(bcodes)))
 
   print 'loaded {} X {}'.format(len(bcodes), len(snps))
 
+  # round probs to get haplotype matrix
+  K_, N_ = p_H.shape
+  H = np.zeros((K_, N_))
+  H[p_H >= 0.5] = 1
+  H[p_H < 0.5] = -1
+
   # determine read assignment to haplotypes
   W = np.empty((M_,))
   W.fill(-1)
-
-  logP, M, MM, S = score(A, H)
+  for i in xrange(M_):
+    assn = np.argmax(p_C[i,:])
+    if p_C[i,assn] > 0.8:
+      W[i] = assn
+    else:
+      pass
 
   outdir_path = os.path.join(scratch_path, 'bins')
   util.mkdir_p(outdir_path)
@@ -312,39 +351,6 @@ def make_outputs(scratch_path):
   for k in xrange(K):
     out_path = os.path.join(outdir_path, '{}.bin.txt'.format(k)) 
     sel_rids = np.nonzero(W == k)[0]
-    if True:
-    #if k == 1:
-
-      mA = A[sel_rids,:].copy() * H[k,:]
-      mmA = A[sel_rids,:].copy() * H[k,:]
-      mA[mA < 0] = 0
-      mA = np.abs(mA)
-      mmA[mmA > 0] = 0
-      mmA = np.abs(mmA)
-      sel_snps = np.any(A[sel_rids,:] != 0, axis=0)
-
-      hapM = np.sum(mA,axis=0)
-      hapMM = np.sum(mmA, axis=0)
-
-      m = hapM[sel_snps]
-      mm = hapMM[sel_snps]
-
-      diffs = sorted(zip(mm, m),reverse=True)
-
-      mmgt = 0
-      mgt = 0
-      for mm, m in diffs:
-        if mm > m:
-          mmgt += 1
-        else:
-          mgt += 1
-      print 'k', k
-      print '  more mm', mmgt
-      print '  more m', mgt
-      print '  diffs', diffs[:10]
-      print '  end diffs', diffs[-10:]
-      print
-
     bcode_set = set()
     with open(out_path, 'w') as fout:
       for rid in np.nditer(sel_rids):
@@ -355,7 +361,7 @@ def make_outputs(scratch_path):
     clusters_map[k] = bcode_set
 
   out_path = os.path.join(scratch_path, 'bins', 'clusters.p')
-  write_pickle(out_path, clusters_map)
+  util.write_pickle(out_path, clusters_map)
   print 'assigned barcodes', sum((W != -1))
   print 'unassigned barcodes', sum((W == -1))
 
