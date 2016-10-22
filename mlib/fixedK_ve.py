@@ -7,6 +7,7 @@ from collections import defaultdict, Counter
 import h5py
 
 import util
+import debug
 
 #K = 5
 K = 10
@@ -40,6 +41,14 @@ def phase(scratch_path):
   print 'loaded {} X {}'.format(len(bcodes), len(snps))
 
   M_, N_ = A.shape
+
+  ## FIXME remove
+  ## fix A to be 1, -1 and not allow barcodes to have multiple matches per
+  ## site
+  #print 'prev calls +1:{}, -1:{}'.format(np.sum(A[A>0]), np.sum(A[A<0]))
+  #A[A > 0] = 1
+  #A[A < 0] = -1
+  #print 'post calls +1:{}, -1:{}'.format(np.sum(A[A>0]), np.sum(A[A<0]))
 
   # hidden haplotypes
   H = np.ones((K, N_))
@@ -128,80 +137,48 @@ def make_outputs(scratch_path):
   h5f.close()
   M_, N_ = A.shape
   idx_rid_map = dict(list(enumerate(bcodes)))
+  idx_snp_map = dict(list(enumerate(snps)))
 
   print 'loaded {} X {}'.format(len(bcodes), len(snps))
-
-  missing_bcodes = set()
-  #with open(os.path.join(scratch_path, 'missing-bcodes.txt')) as fin:
-  #  for line in fin:
-  #    bcode = line.strip()
-  #    missing_bcodes.add(bcode)
 
   # determine read assignment to haplotypes
   W = np.empty((M_,))
   W.fill(-1)
 
   logP, M, MM, S = score(A, H)
-  missing_cnt = Counter()
+  S_n = np.zeros((M_, K))
   for i in xrange(M_):
     bcode = idx_rid_map[i]
     # renormalize across K haps for this read
-    S[i,:] -= logsumexp(S[i,:])
+    S_n[i,:] = S[i,:] - logsumexp(S[i,:])
     # only assign if majority rule
-    assn = np.argmax(S[i,:])
-    if np.exp(S[i,assn]) > 0.8:
+    assn = np.argmax(S_n[i,:])
+    if np.exp(S_n[i,assn]) > 0.8:
       W[i] = assn
-      if bcode in missing_bcodes:
-        missing_cnt[assn] += 1
-        #if assn == 1:
-        #  print '(m, mm):{},{}'.format(M[i,assn], MM[i,assn])
     else:
-      if bcode in missing_bcodes:
-        missing_cnt[-1] += 1
-
-  print 'missing hits', missing_cnt.most_common()
-  #die
+      pass
 
   outdir_path = os.path.join(scratch_path, 'bins')
+  debugdir_path = os.path.join(scratch_path, 'debug')
   util.mkdir_p(outdir_path)
+  util.mkdir_p(debugdir_path)
+
+  debug_assn_path = os.path.join(debugdir_path, 'assn.txt')
+
+  s_idx = np.argsort(W)
+  with open(debug_assn_path, 'w') as fout:
+    for i in np.nditer(s_idx):
+      i = int(i)
+      fout.write('bcode:{}, assn:{}\n'.format(
+        idx_rid_map[i], W[i],
+      ))
+      fout.write('  {}\n'.format(np.array_str(S[i,:],  max_line_width=200)))
+      fout.write('  {}\n'.format(np.array_str(S_n[i,:],max_line_width=200)))
+
   clusters_map = {}
   for k in xrange(K):
     out_path = os.path.join(outdir_path, '{}.bin.txt'.format(k)) 
     sel_rids = np.nonzero(W == k)[0]
-    if True:
-    #if k == 1:
-
-      mA = A[sel_rids,:].copy() * H[k,:]
-      mmA = A[sel_rids,:].copy() * H[k,:]
-      mA[mA < 0] = 0
-      mA = np.abs(mA)
-      mmA[mmA > 0] = 0
-      mmA = np.abs(mmA)
-      sel_snps = np.any(A[sel_rids,:] != 0, axis=0)
-
-      hapM = np.sum(mA,axis=0)
-      hapMM = np.sum(mmA, axis=0)
-
-      m = hapM[sel_snps]
-      mm = hapMM[sel_snps]
-
-      diffs = sorted(zip(mm, m),reverse=True)
-
-      mmgt = 0
-      mgt = 0
-      for mm, m in diffs:
-        if mm > m:
-          mmgt += 1
-        else:
-          mgt += 1
-      print 'k', k
-      print '  more mm', mmgt
-      print '  more m', mgt
-      print '  diffs', diffs[:10]
-      print '  end diffs', diffs[-10:]
-      print
-
-
     bcode_set = set()
     with open(out_path, 'w') as fout:
       for rid in np.nditer(sel_rids):
@@ -211,7 +188,21 @@ def make_outputs(scratch_path):
         bcode_set.add(bcode)
     clusters_map[k] = bcode_set
 
+    debug_path = os.path.join(debugdir_path, 'c.{}'.format(k))
+    util.mkdir_p(debug_path)
+    A_k = A[sel_rids,:]
+    print 'debug for bin', k
+    debug.dump(
+      debug_path,
+      H[k,:],
+      A_k,
+      sel_rids,
+      idx_rid_map,
+      idx_snp_map,
+    )
+
   out_path = os.path.join(scratch_path, 'bins', 'clusters.p')
   util.write_pickle(out_path, clusters_map)
   print 'assigned barcodes', sum((W != -1))
   print 'unassigned barcodes', sum((W == -1))
+
