@@ -74,21 +74,25 @@ def make_inputs(bam_path, vcf_path, scratch_path):
   bam_fin = pysam.Samfile(bam_path, 'rb')
   snp_bcode_counts_map = defaultdict(lambda:defaultdict(Counter))
   seen_set = set()
-  for (i, (ctg, pos)) in enumerate(sorted(var_map)):
+  for (i, target_snp) in enumerate(sorted(var_map)):
+    (ctg, pos) = target_snp
     if i % 500 == 0:
       print 'num snps', i
       #if i > 400:
       #  break
       #break
+    #if target_snp != ('Notch2NL_extended_consensus', 111623-1):
+    #if target_snp != ('Notch2NL_extended_consensus', 77033-1):
+    #  continue
     bbegin = pos
     eend = pos + 1
-    for pcol in bam_fin.pileup(ctg, bbegin, eend):
+    for pcol in bam_fin.pileup(ctg, bbegin, eend, max_depth=999999999):
       snp = (ctg, pcol.pos)
-      if snp not in var_map:
+      if snp != target_snp:
         continue
-      if snp in seen_set:
-        continue
+      assert snp not in seen_set
       seen_set.add(snp)
+      #print 'snp {}:{} depth {}'.format(ctg, pos, pcol.n)
       for read in pcol.pileups:
         bcode = get_barcode(read.alignment)
         if bcode == None:
@@ -99,6 +103,7 @@ def make_inputs(bam_path, vcf_path, scratch_path):
         snp = (ctg, pcol.pos)
         allele = str(read.alignment.query_sequence[read.query_position]).lower()
         snp_bcode_counts_map[snp][bcode][allele] += 1
+
   bam_fin.close()
 
   # filter snps based on within barcode conflicts + coverage
@@ -110,31 +115,50 @@ def make_inputs(bam_path, vcf_path, scratch_path):
   pass_vcf_fout = vcf.Writer(pass_vcf_fout_, vcf_fin)
   filt_vcf_fout = vcf.Writer(filt_vcf_fout_, vcf_fin)
 
+  def is_mix(c1, c2):
+    if c2 > c1:
+      c1, c2 = c2, c1
+    ## pass
+    #return c2 < 0.05 * c1 or (c2 == 1 and c1 > 5)
+    # mix
+    return c2 > 0.05 * c1 and not (c2 == 1 and c1 > 5)
+
   pass_snps = []
   for record in vcf_fin:
     snp = (record.CHROM, record.POS - 1)
     if snp not in var_map:
       continue
     ref_allele, alt_allele = var_map[snp]
-    ref_cnts = 0
-    alt_cnts = 0
-    mix_bcodes = 0
+    ref_calls = 0
+    ref_mix   = 0
+    alt_calls = 0
+    alt_mix   = 0
     for bcode, counts in snp_bcode_counts_map[snp].items():
-      ref_cnts += counts[ref_allele] > 0
-      alt_cnts += counts[alt_allele] > 0
-      mix = (counts[ref_allele] > 0 and counts[alt_allele] > 0)
-      mix_bcodes += mix
+      rc, ac = (counts[ref_allele], counts[alt_allele])
+      if rc > 0 and rc >= ac:
+        ref_calls += 1
+        ref_mix += is_mix(rc, ac)
+      elif ac > 0 and ac > rc:
+        alt_calls += 1
+        alt_mix += is_mix(rc, ac)
    
     record.INFO = {}
-    record.INFO['filters'] = 'ref:{};alt:{};mix:{};'.format(
-      ref_cnts, alt_cnts, mix_bcodes)
-    if mix_bcodes < 2 and ref_cnts >= 10 and alt_cnts >= 10:
+    record.INFO['filters'] = 'ref:{};ref-m:{};alt:{};alt-m:{};'.format(
+      ref_calls, ref_mix,
+      alt_calls, alt_mix,
+    )
+    if (
+      ref_calls >= 10 and alt_calls >= 10 and
+      ref_mix <= 0.05 * ref_calls and
+      alt_mix <= 0.05 * alt_calls
+    ):
       pass_vcf_fout.write_record(record)
       pass_snps.append(snp)
     else:
       filt_vcf_fout.write_record(record)
 
-  # filter for barcodes covering at >1 informative snp
+  # filter for barcodes covering >1 informative snp
+  # remove mixed calls from barcodes
   pass_snps_set = set(pass_snps)
   bcode_snp_counts = Counter()
   for snp, bcode_counts_map in snp_bcode_counts_map.items():
@@ -163,15 +187,14 @@ def make_inputs(bam_path, vcf_path, scratch_path):
       if bcode not in pass_bcodes_set:
         continue
       i = rid_idx_map[bcode]
-      ref_cnts = counts[ref_allele]
-      alt_cnts = counts[alt_allele]
+      rc, ac = (counts[ref_allele], counts[alt_allele])
       # skip mixed
-      if ref_cnts > 0 and alt_cnts > 0:
+      if is_mix(rc, ac):
         continue
-      if ref_cnts > 0:
-        A[i,j] = -ref_cnts
-      elif alt_cnts > 0:
-        A[i,j] = alt_cnts
+      if rc > ac:
+        A[i,j] = -rc
+      elif ac > rc:
+        A[i,j] = ac
 
   pass_snps_vec = np.array(pass_snps)
   pass_bcodes_vec = np.array(pass_bcodes)
