@@ -156,6 +156,8 @@ def make_inputs(bam_path, vcf_path, scratch_path):
       pass_snps.append(snp)
     else:
       filt_vcf_fout.write_record(record)
+      # clear counter for filtered snps
+      counts.clear()
 
   # filter for barcodes covering >1 informative snp
   # remove mixed calls from barcodes

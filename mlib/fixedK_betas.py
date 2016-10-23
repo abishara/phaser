@@ -13,8 +13,8 @@ import util
 (alpha, beta) = (1.0, 1.0)
 (alpha, beta) = (1.0, 0.1)
 (alpha, beta) = (1.0, 0.01)
-K = 5
-#K = 10
+#K = 5
+K = 10
 
 # normalization constant for the beta
 beta_R = (
@@ -75,15 +75,37 @@ def get_initial_state(A):
   M_, N_ = A.shape
 
   # get inspired by some reads to initialize the hidden haplotypes
-  #FIXME TODO
-  H = np.ones((K, N_))
+  H = np.zeros((K, N_))
   C = np.random.choice(K, M_)
-  C[:K] = np.arange(K)
-  #print C
-  #die
+
+  # pass through reads and greedily assign to cluster with the fewest
+  # mismatches per assignment
+  for i in xrange(M_):
+    r = A[i,:]
+    mms = np.zeros(K)
+    for k in xrange(K):
+      mms[k] = np.sum(np.abs((H[k,:] * np.sign(r)).clip(max=0)))
+    k_c = np.argmin(mms)
+    # overwrite current haplotype value with this read's nonzero calls
+    H[k_c,(r != 0)] = np.sign(r[r != 0])
+    C[i] = k_c
+
+  # every cluster must have at least one read for now
+  for k in xrange(K):
+    if not (C == k).any():
+      C[k] = k
+    print '{} reads assigned to hap {}'.format(
+      np.sum(C == k),
+      k
+    )
+
+  print 'init H'
+  print H
+  print 'init C'
+  print C
 
   ## FIXME remove
-  ## seed with answer
+  ## seed with answer (for toy example)
   #H = np.array(A[:5,:])
   #C = np.arange(M_)
   #C = C % K
@@ -152,7 +174,10 @@ def phase(scratch_path):
   h5_path = os.path.join(scratch_path, 'inputs.h5')
   snps, bcodes, A = util.load_phase_inputs(h5_path)
 
+
   print 'loaded {} X {}'.format(len(bcodes), len(snps))
+  # FIXME change to assert
+  print 'number nonzero', np.sum(np.any((A != 0), axis=1))
 
   M_, N_ = A.shape
 
@@ -190,7 +215,8 @@ def phase(scratch_path):
  
   num_iterations = 400
   num_samples = 50
-  sample_step = 1
+  sample_step = 2
+  #num_iterations = 200
 
   #num_iterations = 10000
   #num_samples = 50
@@ -207,11 +233,15 @@ def phase(scratch_path):
   H_samples = np.zeros((num_samples, K, N_))
   C_samples = np.zeros((num_samples, M_))
   for iteration in xrange(num_iterations):
+
+    ##print 'iteration', iteration
+    #if iteration > 1:
+    #  num_samples = 2
+    #  print 'early exit'
+    #  break
+
     print 'iteration', iteration
-    #if iteration > 9:
-    #  print 'early exit!'
-    #  sys.exit(0)
-    if iteration % 100 == 0:
+    if iteration % 50 == 0:
       print 'iteration', iteration
 
     # save sample
@@ -219,12 +249,17 @@ def phase(scratch_path):
       H_samples[sidx,:,:] = H
       C_samples[sidx,:] = C
       sidx = (sidx + 1) % num_samples
-    #print 'H', H
-    #print 'C', C
 
     for i_p in xrange(M_):
 
       r_i = A[i_p,:]
+
+      # FIXME remove
+      # skip empty reads that made their way into genotype matrix from bug
+      # in mkinputs
+      if (r_i == 0).all():
+        continue
+
       k_p = C[i_p]
 
       # matches with current assignment
@@ -300,12 +335,13 @@ def phase(scratch_path):
   assert_state(A, H, C, M, MM, G)
 
   print 'finished sampling'
+  print 'num samples', num_samples
   # convert ref from -1 to 0 so can compute sampled probability
   H_samples[H_samples == -1] = 0
-  p_H = np.sum(H_samples,axis=0) / num_samples
+  p_H = np.sum(H_samples[:num_samples,:,:],axis=0) / num_samples
   p_C = np.zeros((M_,K))
   for k in xrange(K):
-    p_C[:,k] = 1.* np.sum(C_samples == k,axis=0) / num_samples
+    p_C[:,k] = 1.* np.sum(C_samples[:num_samples,:] == k,axis=0) / num_samples
   #for i in xrange(num_samples):
   #  print 'H sample'
   #  print H_samples[i,:,:]
