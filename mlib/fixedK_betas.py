@@ -28,14 +28,18 @@ def get_hap_counts(r, H_k):
   mm = np.abs((H_k * r).clip(max=0))
   return (m, mm)
 
+beta_cache = {}
 def score_beta_site(m, mm):
+  if m.shape == () and (m, mm) in beta_cache:
+    return beta_cache[(m, mm)]
   a = gammaln(m + alpha)
   b = gammaln(mm + beta)
   a_p = gammaln(mm + alpha)
   b_p = gammaln(m + beta)
   n = gammaln(m + mm + alpha + beta)
   logZ = logsumexp([a + b, a_p + b_p], axis=0)
-
+  if m.shape == ():
+    beta_cache[(m, mm)] = (a, b, a_p, b_p, n, logZ)
   return a, b, a_p, b_p, n, logZ
 
 def score(A, H, C):
@@ -114,22 +118,18 @@ def sample_haplotype_seed(r):
   return H
 
 def sample_haplotype(M, MM, G, H_p, A_k, seed=None):
-  # must be populated with at least one read
-  assert A_k.shape[0] > 0
 
   N = M.shape[0]
   H_n = np.zeros(N)
 
   def assert_hap_state(H):
+    assert A_k.shape[0] > 0
     for j in xrange(N):
       M_c = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == H[j], j]))
       MM_c = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == -H[j], j]))
       assert M[j]  == M_c
       assert MM[j] == MM_c
       assert (G[j,:] == score_beta_site(M_c, MM_c)).all()
-
-  # FIXME TODO
-  # can cheat and maybe only sample from the changed bits
 
   #assert_hap_state(H_p)
   logP_flip = (G[:,2] + G[:,3]) - G[:,5]
@@ -147,6 +147,7 @@ def sample_haplotype(M, MM, G, H_p, A_k, seed=None):
 
   return H_n
 
+#@profile
 def phase(scratch_path):
   h5_path = os.path.join(scratch_path, 'inputs.h5')
   snps, bcodes, A = util.load_phase_inputs(h5_path)
@@ -207,6 +208,9 @@ def phase(scratch_path):
   C_samples = np.zeros((num_samples, M_))
   for iteration in xrange(num_iterations):
     print 'iteration', iteration
+    #if iteration > 9:
+    #  print 'early exit!'
+    #  sys.exit(0)
     if iteration % 100 == 0:
       print 'iteration', iteration
 
@@ -219,10 +223,6 @@ def phase(scratch_path):
     #print 'C', C
 
     for i_p in xrange(M_):
-      #print 'read', i_p
-      #if i_p > 100:
-      #  print 'early exit!'
-      #  sys.exit(0)
 
       r_i = A[i_p,:]
       k_p = C[i_p]
@@ -243,10 +243,10 @@ def phase(scratch_path):
 
       # set assignment to nil for now to resample hap
       C[i_p] = -1
-      A_k = A[(C == k_p),:]
-      if A_k.shape[0] == 0:
+      if not (C == k_p).any():
         H_p = sample_haplotype_seed(r_i)
       else:
+        A_k = None
         H_p = sample_haplotype(M_p, MM_p, G_p, H[k_p,:], A_k)
       C[i_p] = k_p
 
@@ -272,7 +272,8 @@ def phase(scratch_path):
 
       # resample since stayed
       if k_n == k_p:
-        A_k = A[(C == k_n),:]
+        #A_k = A[(C == k_n),:]
+        A_k = None
         H[k_n,:] = sample_haplotype(M[k_n,:], MM[k_n,:], G[k_n,:,:], H[k_n,:], A_k)
       # update haplotypes with new assignment
       else:
@@ -292,7 +293,8 @@ def phase(scratch_path):
         for j in np.nditer(np.nonzero(A[i_p,:] != 0)):
           G[k_n,j,:] = score_beta_site(M[k_n,j], MM[k_n,j])
         # resample updated haplotype
-        A_k = A[(C == k_n),:]
+        A_k = None
+        #A_k = A[(C == k_n),:]
         H[k_n,:] = sample_haplotype(M[k_n,:], MM[k_n,:], G[k_n,:,:], H[k_n,:], A_k)
 
   assert_state(A, H, C, M, MM, G)
