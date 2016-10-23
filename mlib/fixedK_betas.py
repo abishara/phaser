@@ -31,8 +31,12 @@ def get_hap_counts(r, H_k):
 def score_beta_site(m, mm):
   a = gammaln(m + alpha)
   b = gammaln(mm + beta)
+  a_p = gammaln(mm + alpha)
+  b_p = gammaln(m + beta)
   n = gammaln(m + mm + alpha + beta)
-  return a, b, n
+  logZ = logsumexp([a + b, a_p + b_p], axis=0)
+
+  return a, b, a_p, b_p, n, logZ
 
 def score(A, H, C):
   M_, N_ = A.shape
@@ -41,7 +45,7 @@ def score(A, H, C):
   M  = np.zeros((K, N_))
   MM = np.zeros((K, N_))
   # gamma counts
-  G = np.zeros((K, N_, 3))
+  G = np.zeros((K, N_, 6))
   # cluster scores with current assignment
   S = np.zeros((K, 1))
 
@@ -57,7 +61,7 @@ def score(A, H, C):
       N_ * beta_R + 
       np.sum(G[k,:,0]) + 
       np.sum(G[k,:,1]) -
-      np.sum(G[k,:,2])
+      np.sum(G[k,:,4])
     )
   logP = np.sum(S)
 
@@ -115,7 +119,6 @@ def sample_haplotype(M, MM, G, H_p, A_k, seed=None):
 
   N = M.shape[0]
   H_n = np.zeros(N)
-  G_n = np.zeros((N, 3))
 
   def assert_hap_state(H):
     for j in xrange(N):
@@ -125,17 +128,11 @@ def sample_haplotype(M, MM, G, H_p, A_k, seed=None):
       assert MM[j] == MM_c
       assert (G[j,:] == score_beta_site(M_c, MM_c)).all()
 
+  # FIXME TODO
+  # can cheat and maybe only sample from the changed bits
+
   #assert_hap_state(H_p)
-  # get flipped gammas for all sites
-  G_n[:,0], G_n[:,1], G_n[:,2] = score_beta_site(MM, M)
-  logP_p = G[:,0] + G[:,1]
-  logP_n = G_n[:,0] + G_n[:,1]
-  # renormalize
-  logP_flip = logP_n - np.apply_along_axis(
-    logsumexp,
-    0,
-    np.vstack((logP_p, logP_n)),
-  )
+  logP_flip = (G[:,2] + G[:,3]) - G[:,5]
   # choose bits to flip
   p = np.random.random(N)
   flip_mask = p < np.exp(logP_flip)
@@ -145,7 +142,7 @@ def sample_haplotype(M, MM, G, H_p, A_k, seed=None):
   # update sufficient statistics for loci that flipped
   fm = flip_mask
   MM[fm], M[fm] = M[fm], MM[fm]
-  G[fm,:] = G_n[fm,:]
+  G[fm,0], G[fm,1], G[fm,2], G[fm,3] = G[fm,2], G[fm,3], G[fm,0], G[fm,1]
   #assert_hap_state(H_n)
 
   return H_n
@@ -186,8 +183,8 @@ def phase(scratch_path):
     H[k,:] = sample_haplotype(M[k,:], MM[k,:], G[k,:,:], H[k,:], A_k)
 
   # compute seed gammas for empty hap
-  G_seed = np.zeros((N_, 3))
-  G_seed[:,0], G_seed[:,1], G_seed[:,2] = \
+  G_seed = np.zeros((N_, 6))
+  G_seed[:,0], G_seed[:,1], G_seed[:,2], G_seed[:,3], G_seed[:,4], G_seed[:,5] = \
     score_beta_site(np.zeros(N_), np.zeros(N_))
  
   num_iterations = 400
@@ -209,6 +206,7 @@ def phase(scratch_path):
   H_samples = np.zeros((num_samples, K, N_))
   C_samples = np.zeros((num_samples, M_))
   for iteration in xrange(num_iterations):
+    print 'iteration', iteration
     if iteration % 100 == 0:
       print 'iteration', iteration
 
@@ -221,6 +219,10 @@ def phase(scratch_path):
     #print 'C', C
 
     for i_p in xrange(M_):
+      #print 'read', i_p
+      #if i_p > 100:
+      #  print 'early exit!'
+      #  sys.exit(0)
 
       r_i = A[i_p,:]
       k_p = C[i_p]
