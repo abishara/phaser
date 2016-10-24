@@ -169,13 +169,29 @@ def sample_haplotype(M, MM, G, H_p, A_k, seed=None):
 
   return H_n
 
+def subsample_reads(bcodes, A, lim=5000):
+  # subsample most informative barcodes
+  A_z = np.sum((A == 0), axis=1)
+  s_idx = np.argsort(A_z)
+  #for z, cnt in sorted(Counter(A_z).items(), reverse=True):
+  #  print len(snps) - z, cnt
+  A = A[s_idx,:][:lim,:]
+
+  print 'min occupancy', A.shape[1] - A_z[s_idx][lim]
+
+  bcodes = map(str, np.array(bcodes)[s_idx][:lim])
+  return bcodes, A
+
+
 #@profile
 def phase(scratch_path):
   h5_path = os.path.join(scratch_path, 'inputs.h5')
   snps, bcodes, A = util.load_phase_inputs(h5_path)
 
-
   print 'loaded {} X {}'.format(len(bcodes), len(snps))
+  bcodes, A = subsample_reads(bcodes, A, lim=5000)
+  print '  - subsample to {} X {}'.format(len(bcodes), len(snps))
+
   # FIXME change to assert
   print 'number nonzero', np.sum(np.any((A != 0), axis=1))
 
@@ -234,7 +250,6 @@ def phase(scratch_path):
   C_samples = np.zeros((num_samples, M_))
   for iteration in xrange(num_iterations):
 
-    ##print 'iteration', iteration
     #if iteration > 1:
     #  num_samples = 2
     #  print 'early exit'
@@ -364,10 +379,14 @@ def make_outputs(scratch_path):
   p_H = np.array(h5f['p_H'])
   p_C = np.array(h5f['p_C'])
   h5f.close()
-  M_, N_ = A.shape
-  idx_rid_map = dict(list(enumerate(bcodes)))
 
   print 'loaded {} X {}'.format(len(bcodes), len(snps))
+  bcodes, A = subsample_reads(bcodes, A, lim=5000)
+  print '  - subsample to {} X {}'.format(len(bcodes), len(snps))
+
+  idx_rid_map = dict(list(enumerate(bcodes)))
+  M_, N_ = A.shape
+
 
   # round probs to get haplotype matrix
   K_, N_ = p_H.shape
