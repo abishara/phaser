@@ -23,7 +23,6 @@ from matplotlib import cm
 # maintain plot count
 plot_count = 0 
 
-
 def dump(
   outdir_path,
   H_k,
@@ -114,4 +113,64 @@ def dump(
   pyplot.close()
 
   return
-  
+ 
+def compute_entropy(
+  A_,
+):
+  # read coverage
+  #m  = np.apply_along_axis(np.sum, 0, A.clip(min=0))
+  #mm = np.apply_along_axis(np.sum, 0, np.abs(A.clip(max=0)))
+  #n  = mm + m
+
+  # barcode coverage
+  A = np.array(A_)
+  A[A>0] = 1
+  A[A<0] = -1
+  m  = np.apply_along_axis(np.sum, 0, A.clip(min=0))
+  mm = np.apply_along_axis(np.sum, 0, np.abs(A.clip(max=0)))
+  n  = mm + m
+
+  mask = (n >= 10)
+
+  A = A[:,mask]
+  m = m[mask]
+  mm = mm[mask]
+  n  = n[mask]
+  sel_snps = np.nonzero(mask)[0]
+
+  P = np.vstack([m/n, mm/n])
+  entr = np.sum(-np.log2(P) * P, axis=0)
+
+  # set zero entropy sites
+  entr[np.isnan(entr)] = 0.
+
+  return n, mask, sel_snps, entr
+
+
+def plot_entropy(
+  k,
+  outdir_path,
+  A,
+  debug=True,
+):
+  n, mask, sel_snps, entr = compute_entropy(A)
+
+  # for zero entropy sites, go through highest coverage and find one that is 
+  nhmask = (entr == 0)
+  nhsel_snps = sel_snps[nhmask]
+  s_idx = np.argsort(-n[nhmask])
+
+  fp_snps_list = []
+  if debug:
+    if nhmask.any():
+      for j in np.nditer(nhsel_snps[s_idx]):
+        rmask = (A[:,j] != 0)
+        A_sub = A[rmask,:]
+        sub_n, sub_mask, sub_sel_snps, sub_entr = compute_entropy(A_sub)
+        if (sub_entr > 0.8).any():
+          fp_snps_list.append(
+            (int(j), sub_mask, sub_entr)
+          )
+          #break
+  return mask, entr, fp_snps_list
+

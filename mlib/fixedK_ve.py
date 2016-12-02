@@ -5,10 +5,12 @@ import random
 from scipy.misc import logsumexp
 from collections import defaultdict, Counter
 import h5py
+import pandas
 
 import util
 import debug
 
+num_iterations = 12
 #K = 5
 K = 10
 prob_const = {
@@ -39,19 +41,13 @@ def phase(scratch_path):
   snps, bcodes, A = util.load_phase_inputs(h5_path)
 
   print 'loaded {} X {}'.format(len(bcodes), len(snps))
+  bcodes, A = util.subsample_reads(bcodes, A, lim=5000)
+  print '  - subsample to {} X {}'.format(len(bcodes), len(snps))
 
   M_, N_ = A.shape
 
-  ## FIXME remove
-  ## fix A to be 1, -1 and not allow barcodes to have multiple matches per
-  ## site
-  #print 'prev calls +1:{}, -1:{}'.format(np.sum(A[A>0]), np.sum(A[A<0]))
-  #A[A > 0] = 1
-  #A[A < 0] = -1
-  #print 'post calls +1:{}, -1:{}'.format(np.sum(A[A>0]), np.sum(A[A<0]))
-
   # hidden haplotypes
-  H = np.ones((K, N_))
+  H, _ = util.get_initial_state(A, K)
 
   # initialize and save intermediate values for fast vectorized
   # computation
@@ -60,7 +56,11 @@ def phase(scratch_path):
   H_min = np.array(H)
   print 'initial logP', logP
 
-  for iteration in xrange(12):
+  sidx = 0
+  H_samples = np.zeros((num_iterations, K, N_))
+  for iteration in xrange(num_iterations):
+    H_samples[sidx,:,:] = H
+    sidx = (sidx + 1) % num_iterations
     print 'iteration', iteration
     for k_p in xrange(K):
       print '  - hap {}, logP: {}'.format(k_p, logP)
@@ -126,6 +126,7 @@ def phase(scratch_path):
   h5_path = os.path.join(scratch_path, 'phased.h5')
   h5f = h5py.File(h5_path, 'w')
   h5f.create_dataset('H', data=H_min)
+  h5f.create_dataset('H_samples', data=H_samples)
   h5f.close()
 
 def make_outputs(scratch_path):
@@ -134,12 +135,26 @@ def make_outputs(scratch_path):
   snps, bcodes, A = util.load_phase_inputs(inputsh5_path)
   h5f = h5py.File(phaseh5_path, 'r')
   H = np.array(h5f['H'])
+  H_samples = np.array(h5f['H_samples'])
   h5f.close()
+
+  print 'loaded {} X {}'.format(len(bcodes), len(snps))
+  bcodes, A = util.subsample_reads(bcodes, A, lim=5000)
+  print '  - subsample to {} X {}'.format(len(bcodes), len(snps))
+
   M_, N_ = A.shape
   idx_rid_map = dict(list(enumerate(bcodes)))
   idx_snp_map = dict(list(enumerate(snps)))
 
-  print 'loaded {} X {}'.format(len(bcodes), len(snps))
+  # determine final haplotypes from samples
+  num_samples = num_iterations-4
+  # convert ref from -1 to 0 so can compute sampled probability
+  H_samples[H_samples == -1] = 0
+  p_H = np.sum(H_samples[4:4+num_samples,:,:],axis=0) / num_samples
+  K_, N_ = p_H.shape
+  #H = np.zeros((K_, N_))
+  #H[p_H >= 0.7] = 1
+  #H[p_H < 0.03] = -1
 
   # determine read assignment to haplotypes
   W = np.empty((M_,))
@@ -175,33 +190,56 @@ def make_outputs(scratch_path):
       fout.write('  {}\n'.format(np.array_str(S_n[i,:],max_line_width=200)))
 
   clusters_map = {}
+  E = np.zeros(K)
+  D = np.empty(M_)
+  D.fill(-1)
   for k in xrange(K):
     out_path = os.path.join(outdir_path, '{}.bin.txt'.format(k)) 
     sel_rids = np.nonzero(W == k)[0]
     bcode_set = set()
+    A_k = A[(W == k),:]
+    _, entr, _ = debug.plot_entropy(
+      k,
+      debugdir_path,
+      A_k,
+      debug=False,
+    )
+    num_hsites = np.sum(entr > 0.5)
+    E[k] = num_hsites
     with open(out_path, 'w') as fout:
       for rid in np.nditer(sel_rids):
         rid = int(rid)
         bcode = idx_rid_map[rid]
         fout.write('{}\n'.format(bcode))
         bcode_set.add(bcode)
+        D[rid] = 1. * np.sum(A[rid,:] * H[k,:] < 0)
+    df = pandas.DataFrame(D[sel_rids])
+    print 'cluster', k
+    #print 'fragment mismatches with final assignment', \
+    #  df[df > 2].describe()
+
     clusters_map[k] = bcode_set
 
     debug_path = os.path.join(debugdir_path, 'c.{}'.format(k))
     util.mkdir_p(debug_path)
-    A_k = A[sel_rids,:]
-    print 'debug for bin', k
-    debug.dump(
-      debug_path,
-      H[k,:],
-      A_k,
-      sel_rids,
-      idx_rid_map,
-      idx_snp_map,
-    )
+
+  print 'entropy', E
+  df = pandas.DataFrame(D)
+  print 'total fragment mismatches with final assignment', \
+    df[df > 5].describe()
 
   out_path = os.path.join(scratch_path, 'bins', 'clusters.p')
   util.write_pickle(out_path, clusters_map)
+
+  h5_path = os.path.join(scratch_path, 'bins', 'clusters.h5')
+  h5f = h5py.File(h5_path, 'w')
+  h5f.create_dataset('H', data=H)
+  h5f.create_dataset('W', data=W)
+  h5f.close()
+
+  print 'total haplotype positions', K_ * N_
+  print '  - assigned', np.sum(np.abs(H))
+
   print 'assigned barcodes', sum((W != -1))
   print 'unassigned barcodes', sum((W == -1))
 

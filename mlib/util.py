@@ -23,12 +23,19 @@ def write_pickle(path, obj):
   )
   f.close()
 
+def load_pickle(path):
+  f = open(path,'r')
+  obj = pickle.load(f)
+  f.close()
+  return obj 
+
 #--------------------------------------------------------------------------
 # 10x
 #--------------------------------------------------------------------------
 
 def get_barcode(read):
-  filt_list = filter(lambda(k, v): k in 'BC', read.tags)
+  filt_list = filter(lambda(k, v): k in ['BC', 'BX'], read.tags)
+  assert len(filt_list) <= 1
   if filt_list == []: 
     return None
   else:
@@ -65,6 +72,7 @@ def load_phase_inputs(h5_path):
   bcodes = map(lambda(k): str(k), h5f['bcodes'])
   A = np.array(h5f['genotypes'])
   h5f.close()
+  A = get_normalized_genotypes(A)
   return snps, bcodes, A
 
 def make_inputs(bam_path, vcf_path, scratch_path):
@@ -156,8 +164,6 @@ def make_inputs(bam_path, vcf_path, scratch_path):
       pass_snps.append(snp)
     else:
       filt_vcf_fout.write_record(record)
-      # clear counter for filtered snps
-      counts.clear()
 
   # filter for barcodes covering >1 informative snp
   # remove mixed calls from barcodes
@@ -258,3 +264,68 @@ def make_inputs(bam_path, vcf_path, scratch_path):
   h5f.create_dataset('bcodes', data=pass_bcodes)
   h5f.create_dataset('genotypes', data=A)
   h5f.close()
+
+#--------------------------------------------------------------------------
+# phasing utilities
+#--------------------------------------------------------------------------
+
+def get_initial_state(A, K):
+  M_, N_ = A.shape
+
+  # get inspired by some reads to initialize the hidden haplotypes
+  H = np.zeros((K, N_))
+  C = np.random.choice(K, M_)
+
+  # pass through reads and greedily assign to cluster with the fewest
+  # mismatches per assignment
+  for i in xrange(M_):
+    r = A[i,:]
+    mms = np.zeros(K)
+    for k in xrange(K):
+      mms[k] = np.sum(np.abs((H[k,:] * np.sign(r)).clip(max=0)))
+    k_c = np.argmin(mms)
+    # overwrite current haplotype value with this read's nonzero calls
+    H[k_c,(r != 0)] = np.sign(r[r != 0])
+    C[i] = k_c
+
+  # every cluster must have at least one read for now
+  for k in xrange(K):
+    if not (C == k).any():
+      C[k] = k
+    print '{} reads assigned to hap {}'.format(
+      np.sum(C == k),
+      k
+    )
+  print 'init H'
+  print H
+  print 'init C'
+  print C
+
+  ## FIXME remove
+  ## seed with answer (for toy example)
+  #H = np.array(A[:5,:])
+  #C = np.arange(M_)
+  #C = C % K
+
+  return H, C
+
+def get_normalized_genotypes(_A):
+  A = np.array(_A)
+  A[A>0] = 1
+  A[A<0] = -1
+  return A
+
+def subsample_reads(bcodes, A, lim=5000):
+  # subsample most informative barcodes
+  A_z = np.sum((A == 0), axis=1)
+  s_idx = np.argsort(A_z)
+  #for z, cnt in sorted(Counter(A_z).items(), reverse=True):
+  #  print len(snps) - z, cnt
+  A = A[s_idx,:][:lim,:]
+
+  print 'min occupancy', A.shape[1] - A_z[s_idx][lim]
+
+  bcodes = map(str, np.array(bcodes)[s_idx][:lim])
+  return bcodes, A
+
+
