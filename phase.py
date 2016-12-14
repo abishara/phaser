@@ -5,8 +5,8 @@ from collections import defaultdict, Counter
 import numpy as np
 
 from mlib import util
-#from mlib.fixedK_ve import phase, make_outputs
-from mlib.fixedK_betas import phase, make_outputs
+from mlib.fixedK_ve import phase, make_outputs
+#from mlib.fixedK_betas import phase, make_outputs
 
 #=========================================================================
 # main
