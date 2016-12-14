@@ -1,28 +1,28 @@
 import os
 import numpy as np
 from collections import Counter
-import matplotlib
-matplotlib.use('Agg')
-matplotlib.rc('xtick', labelsize=11.5) 
-matplotlib.rc('ytick', labelsize=11.5) 
-matplotlib.rc('ytick', labelsize=11.5) 
-#font = {
-#  'family' : 'serif',
-#  'serif'  : ['times new roman'],
-#  'size'   : 9,
-#}
-#matplotlib.rc('font', **font)
-import pylab
-import matplotlib.pyplot as pyplot
-import matplotlib.ticker as ticker
-from matplotlib.ticker import FuncFormatter
-import datetime
-from matplotlib import dates
-from matplotlib import cm
+#import pylab
+#import matplotlib
+#matplotlib.use('Agg')
+#matplotlib.rc('xtick', labelsize=11.5) 
+#matplotlib.rc('ytick', labelsize=11.5) 
+#matplotlib.rc('ytick', labelsize=11.5) 
+##font = {
+##  'family' : 'serif',
+##  'serif'  : ['times new roman'],
+##  'size'   : 9,
+##}
+##matplotlib.rc('font', **font)
+#import matplotlib.pyplot as pyplot
+#import matplotlib.ticker as ticker
+#from matplotlib.ticker import FuncFormatter
+#import datetime
+#from matplotlib import dates
+#from matplotlib import cm
 
+"""
 # maintain plot count
 plot_count = 0 
-
 def dump(
   outdir_path,
   H_k,
@@ -113,6 +113,7 @@ def dump(
   pyplot.close()
 
   return
+"""
  
 def compute_entropy(
   A_,
