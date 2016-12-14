@@ -5,7 +5,7 @@ setup(
   version = "0.1",
   packages = find_packages(),
   entry_points = {
-    'console_scripts' : ["phaser = phaser.main:main"]
+    'console_scripts' : ["phaser = phaser.phase:main"]
   },
   install_requires=[
     'scipy>=0.18',

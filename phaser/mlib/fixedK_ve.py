@@ -243,3 +243,6 @@ def make_outputs(scratch_path):
   print 'assigned barcodes', sum((W != -1))
   print 'unassigned barcodes', sum((W == -1))
 
+  return clusters_map
+
+

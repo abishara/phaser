@@ -8,15 +8,36 @@ from mlib import util
 from mlib.fixedK_ve import phase, make_outputs
 #from mlib.fixedK_betas import phase, make_outputs
 
+def phase_barcodes(
+  bam_path,
+  vcf_path,
+  scratch_path=None,
+):
+  # FIXME create TMPDIR if none specified
+  assert scratch_path != None
+
+  util.mkdir_p(scratch_path)
+
+  inputs_path = os.path.join(scratch_path, 'inputs.h5')
+  phased_path = os.path.join(scratch_path, 'phased.h5')
+  if not os.path.isfile(inputs_path):
+    util.make_inputs(bam_path, vcf_path, scratch_path)
+  if not os.path.isfile(phased_path):
+    phase(scratch_path)
+  clusters_map = make_outputs(scratch_path)
+  return clusters_map
+
+
+
 #=========================================================================
 # main
 #=========================================================================
-def main(argv):
+def main():
 
   help_str = '''
   phase.py [cmd] <inbam path> <invcf path> <scratch path> [threads]
   '''
-
+  argv = sys.argv
   if len(argv) < 5:
     print help_str
     sys.exit(1)
@@ -44,5 +65,5 @@ def main(argv):
     assert False
 
 if __name__ == '__main__':
-  main(sys.argv)
+  main()
 
