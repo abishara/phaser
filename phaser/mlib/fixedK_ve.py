@@ -11,16 +11,11 @@ import util
 import debug
 
 num_iterations = 12
-#K = 5
-K = 10
-prob_const = {
-  "logP(h)" : math.log(1. / K),
-  "logP(err)"  : math.log(0.01),
-  "logP(err')" : math.log(1 - 0.01),
-} 
+prob_const = {} 
 
 def score(A, H):
-  M_,N_ = A.shape
+  M_, N_ = A.shape
+  K, _ = H.shape
   logP = 0.0
   M  = np.zeros((M_, K))
   MM = np.zeros((M_, K))
@@ -36,9 +31,17 @@ def score(A, H):
     logP += logsumexp(S[i,:])
   return logP, M, MM, S
 
-def phase(scratch_path):
+def phase(scratch_path, K):
+  global prob_const
+
   h5_path = os.path.join(scratch_path, 'inputs.h5')
   snps, bcodes, A = util.load_phase_inputs(h5_path)
+
+  prob_const.update({
+    "logP(h)" : math.log(1. / K),
+    "logP(err)"  : math.log(0.01),
+    "logP(err')" : math.log(1 - 0.01),
+  })
 
   print 'loaded {} X {}'.format(len(bcodes), len(snps))
   bcodes, A = util.subsample_reads(bcodes, A, lim=5000)
@@ -65,6 +68,10 @@ def phase(scratch_path):
     for k_p in xrange(K):
       print '  - hap {}, logP: {}'.format(k_p, logP)
       for j_p in xrange(N_):
+        
+        # skip any entries for which no barcodes overlap this genotype position
+        if not (A[:,j_p] != 0).any():
+          continue
 
         # toggle matches/mismatches at locus j for hap k
         pp = H[k_p, j_p]
@@ -142,6 +149,7 @@ def make_outputs(scratch_path):
   bcodes, A = util.subsample_reads(bcodes, A, lim=5000)
   print '  - subsample to {} X {}'.format(len(bcodes), len(snps))
 
+  K, _ = H.shape
   M_, N_ = A.shape
   idx_rid_map = dict(list(enumerate(bcodes)))
   idx_snp_map = dict(list(enumerate(snps)))

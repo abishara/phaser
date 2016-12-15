@@ -75,7 +75,7 @@ def load_phase_inputs(h5_path):
   A = get_normalized_genotypes(A)
   return snps, bcodes, A
 
-def make_inputs(bam_path, vcf_path, scratch_path):
+def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
   
   var_map = get_variants(vcf_path)
 
@@ -89,9 +89,6 @@ def make_inputs(bam_path, vcf_path, scratch_path):
       #if i > 400:
       #  break
       #break
-    #if target_snp != ('Notch2NL_extended_consensus', 111623-1):
-    #if target_snp != ('Notch2NL_extended_consensus', 77033-1):
-    #  continue
     bbegin = pos
     eend = pos + 1
     for pcol in bam_fin.pileup(ctg, bbegin, eend, max_depth=999999999):
@@ -177,6 +174,9 @@ def make_inputs(bam_path, vcf_path, scratch_path):
 
   pass_bcodes = []
   for bcode, cnt in bcode_snp_counts.most_common():
+    # skip if barcode not in subset specified
+    if bcodes and bcode not in bcodes:
+      continue
     if cnt > 1:
       pass_bcodes.append(bcode)
   pass_bcodes_set = set(pass_bcodes)
@@ -323,8 +323,8 @@ def subsample_reads(bcodes, A, lim=5000):
   #  print len(snps) - z, cnt
   A = A[s_idx,:][:lim,:]
 
-  print 'min occupancy', A.shape[1] - A_z[s_idx][lim]
-
+  last = min(lim, A.shape[0])-1
+  print 'min occupancy', A.shape[1] - A_z[s_idx][last]
   bcodes = map(str, np.array(bcodes)[s_idx][:lim])
   return bcodes, A
 

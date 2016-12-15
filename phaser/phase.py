@@ -11,7 +11,9 @@ from mlib.fixedK_ve import phase, make_outputs
 def phase_barcodes(
   bam_path,
   vcf_path,
-  scratch_path=None,
+  scratch_path,
+  K=10,
+  bcodes=None,
 ):
   # FIXME create TMPDIR if none specified
   assert scratch_path != None
@@ -21,9 +23,9 @@ def phase_barcodes(
   inputs_path = os.path.join(scratch_path, 'inputs.h5')
   phased_path = os.path.join(scratch_path, 'phased.h5')
   if not os.path.isfile(inputs_path):
-    util.make_inputs(bam_path, vcf_path, scratch_path)
+    util.make_inputs(bam_path, vcf_path, scratch_path, bcodes)
   if not os.path.isfile(phased_path):
-    phase(scratch_path)
+    phase(scratch_path, K)
   clusters_map = make_outputs(scratch_path)
   return clusters_map
 
