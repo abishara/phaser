@@ -7,6 +7,7 @@ from scipy.misc import logsumexp
 from scipy.special import gammaln
 from collections import defaultdict, Counter
 import h5py
+import pysam
 
 import util
 import debug
@@ -19,8 +20,8 @@ np.random.seed(0)
 (alpha, beta) = (1.0, 0.1)
 (alpha, beta) = (1.0, 0.01)
 (alpha, beta) = (1.0, 0.1)
-#K = 5
 K = 10
+K = 5
 
 #num_iterations = 2000
 num_iterations = 800
@@ -142,7 +143,7 @@ def sample_haplotype(M, MM, G, H_p, A_k, seed=None):
   return H_n
 
 #@profile
-def phase(scratch_path):
+def phase(scratch_path, K):
   h5_path = os.path.join(scratch_path, 'inputs.h5')
   snps, bcodes, A = util.load_phase_inputs(h5_path)
 
@@ -158,13 +159,14 @@ def phase(scratch_path):
   # hidden haplotypes
   H, C = util.get_initial_state(A, K)
 
-  phaseh5_path = os.path.join(scratch_path, 'phased.h5')
-  h5f = h5py.File(phaseh5_path, 'r')
-  H_samples = np.array(h5f['H_samples'])
-  C_samples = np.array(h5f['C_samples'])
-  h5f.close()
-  H = np.array(H_samples[-1,:,:])
-  C = np.array(C_samples[-1,:], dtype=int)
+  # i don't know wtf this section was
+  #phaseh5_path = os.path.join(scratch_path, 'phased.h5')
+  #h5f = h5py.File(phaseh5_path, 'r')
+  #H_samples = np.array(h5f['H_samples'])
+  #C_samples = np.array(h5f['C_samples'])
+  #h5f.close()
+  #H = np.array(H_samples[-1,:,:])
+  #C = np.array(C_samples[-1,:], dtype=int)
 
   # initialize and save intermediate values for fast vectorized
   # computation
@@ -218,8 +220,9 @@ def phase(scratch_path):
 
     for i_p in xrange(M_):
 
-      if i_p != debug_rid:
-        continue
+      # FIXME remove
+      #if i_p != debug_rid:
+      #  continue
 
       r_i = A[i_p,:]
 
@@ -270,18 +273,18 @@ def phase(scratch_path):
 
       # pick new cluster with prob proportional to scores under K
       # different betas
-      print 'scoreslog ', scores
+      #print 'scoreslog ', scores
       scores = np.exp(scores - logsumexp(scores))
-      print 'scores p', scores
+      #print 'scores p', scores
       assn = np.random.multinomial(1, scores)
       k_n = np.nonzero(assn == 1)[0][0]
-      print 'prev, next', (k_p, k_n)
+      #print 'prev, next', (k_p, k_n)
 
       mismatches = np.zeros(K)
       for _k in xrange(K):
         mismatches[_k] = np.sum(r_i * H[_k,:] < 0)
-      print 'mismatches', mismatches
-      die
+      #print 'mismatches', mismatches
+      #die
 
       # resample since stayed
       if k_n == k_p:
@@ -321,7 +324,7 @@ def phase(scratch_path):
   h5f.create_dataset('C_samples', data=C_samples)
   h5f.close()
 
-def make_outputs(scratch_path):
+def make_outputs(inbam_path, scratch_path, K):
   inputsh5_path = os.path.join(scratch_path, 'inputs.h5')
   phaseh5_path = os.path.join(scratch_path, 'phased.h5')
   snps, bcodes, A = util.load_phase_inputs(inputsh5_path)
@@ -540,6 +543,29 @@ def make_outputs(scratch_path):
 
   out_path = os.path.join(scratch_path, 'bins', 'clusters.p')
   util.write_pickle(out_path, clusters_map)
+
+  # dump output bams
+  bcode_cidx_map = defaultdict(lambda:None)
+  for cidx, bcodes in clusters_map.items():
+    for bcode in bcodes:
+      bcode_cidx_map[bcode] = cidx
+  
+  inbam = pysam.Samfile(inbam_path, 'rb')
+  unassn_path = os.path.join(scratch_path, 'bins', 'unassigned.bam')
+  bam_fouts = {None:pysam.Samfile(unassn_path, 'wb', template=inbam)}
+  for cidx in clusters_map:
+    outbam_path = os.path.join(scratch_path, 'bins', 'cluster.{}.bam'.format(cidx))
+    bam_fouts[cidx] = pysam.Samfile(outbam_path, 'wb', template=inbam)
+  
+  for read in inbam:
+    bcode = util.get_barcode(read)
+    cidx = bcode_cidx_map[bcode]
+    bam_fouts[cidx].write(read)
+
+  inbam.close()
+  for fout in bam_fouts.values():
+    fout.close()
+
 
   print 'total haplotype positions', K * N_
   print '  - assigned', np.sum(np.abs(H))

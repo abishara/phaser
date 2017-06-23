@@ -57,12 +57,14 @@ def main():
   ]
 
   util.mkdir_p(scratch_path)
+  K = 10
+  K = 5
   if cmd == 'mkinputs':
     util.make_inputs(bam_path, vcf_path, scratch_path)
   elif cmd == 'phase':
-    phase(scratch_path)
+    phase(scratch_path, K)
   elif cmd == 'mkoutputs':
-    make_outputs(scratch_path)
+    make_outputs(bam_path, scratch_path, K)
   else:
     assert False
 

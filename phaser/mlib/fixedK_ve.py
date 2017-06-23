@@ -6,6 +6,7 @@ from scipy.misc import logsumexp
 from collections import defaultdict, Counter
 import h5py
 import pandas
+import pysam
 
 import util
 import debug
@@ -136,7 +137,13 @@ def phase(scratch_path, K):
   h5f.create_dataset('H_samples', data=H_samples)
   h5f.close()
 
-def make_outputs(scratch_path):
+def make_outputs(inbam_path, scratch_path, K):
+  global prob_const
+  prob_const.update({
+    "logP(h)" : math.log(1. / K),
+    "logP(err)"  : math.log(0.01),
+    "logP(err')" : math.log(1 - 0.01),
+  })
   inputsh5_path = os.path.join(scratch_path, 'inputs.h5')
   phaseh5_path = os.path.join(scratch_path, 'phased.h5')
   snps, bcodes, A = util.load_phase_inputs(inputsh5_path)
@@ -244,6 +251,28 @@ def make_outputs(scratch_path):
   h5f.create_dataset('H', data=H)
   h5f.create_dataset('W', data=W)
   h5f.close()
+
+  # dump output bams
+  bcode_cidx_map = defaultdict(lambda:None)
+  for cidx, bcodes in clusters_map.items():
+    for bcode in bcodes:
+      bcode_cidx_map[bcode] = cidx
+  
+  inbam = pysam.Samfile(inbam_path, 'rb')
+  unassn_path = os.path.join(scratch_path, 'bins', 'unassigned.bam')
+  bam_fouts = {None:pysam.Samfile(unassn_path, 'wb', template=inbam)}
+  for cidx in clusters_map:
+    outbam_path = os.path.join(scratch_path, 'bins', 'cluster.{}.bam'.format(cidx))
+    bam_fouts[cidx] = pysam.Samfile(outbam_path, 'wb', template=inbam)
+  
+  for read in inbam:
+    bcode = util.get_barcode(read)
+    cidx = bcode_cidx_map[bcode]
+    bam_fouts[cidx].write(read)
+
+  inbam.close()
+  for fout in bam_fouts.values():
+    fout.close()
 
   print 'total haplotype positions', K_ * N_
   print '  - assigned', np.sum(np.abs(H))
