@@ -268,6 +268,44 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
 #--------------------------------------------------------------------------
 # phasing utilities
 #--------------------------------------------------------------------------
+def make_bin_outputs(
+  clusters_map,
+  inbam_path,
+  outdir_path,
+):
+  bcode_cidx_map = defaultdict(lambda:None)
+  for cidx, bcodes in clusters_map.items():
+    for bcode in bcodes:
+      bcode_cidx_map[bcode] = cidx
+
+  # save raw clusters
+  out_path = os.path.join(outdir_path, 'clusters.p')
+  write_pickle(out_path, clusters_map)
+
+  # text file of barcodes in each cluster
+  for k, bcodes in clusters_map.items():
+    out_path = os.path.join(outdir_path, '{}.bin.txt'.format(k)) 
+    with open(out_path, 'w') as fout:
+      for bcode in bcodes:
+        fout.write('{}\n'.format(bcode))
+
+  # dump output bams
+  inbam = pysam.Samfile(inbam_path, 'rb')
+
+  unassn_path = os.path.join(outdir_path, 'unassigned.bam')
+  bam_fouts = {None:pysam.Samfile(unassn_path, 'wb', template=inbam)}
+  for cidx in clusters_map:
+    outbam_path = os.path.join(outdir_path, 'cluster.{}.bam'.format(cidx))
+    bam_fouts[cidx] = pysam.Samfile(outbam_path, 'wb', template=inbam)
+  
+  for read in inbam:
+    bcode = get_barcode(read)
+    cidx = bcode_cidx_map[bcode]
+    bam_fouts[cidx].write(read)
+
+  inbam.close()
+  for fout in bam_fouts.values():
+    fout.close()
 
 def get_initial_state(A, K):
   M_, N_ = A.shape

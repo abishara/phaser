@@ -9,10 +9,9 @@ import pandas
 import pysam
 
 import util
-import debug
+import hyper_params as hp
 
 num_iterations = 12
-prob_const = {} 
 
 def score(A, H):
   M_, N_ = A.shape
@@ -26,23 +25,15 @@ def score(A, H):
     for k in xrange(K):
       M[i,k] = sum(np.abs(A[i,np.sign(A[i,:]) == H[k,:]]))
       MM[i,k] = sum(np.abs(A[i,np.sign(A[i,:]) == -H[k,:]]))
-      S[i,k] = (prob_const["logP(h)"] +
-        prob_const["logP(err')"] * M[i,k] + 
-        prob_const["logP(err)"] * MM[i,k])
+      S[i,k] = (hp.prob_const["logP(h)"] +
+        hp.prob_const["logP(err')"] * M[i,k] + 
+        hp.prob_const["logP(err)"] * MM[i,k])
     logP += logsumexp(S[i,:])
   return logP, M, MM, S
 
-def phase(scratch_path, K):
-  global prob_const
-
+def phase(scratch_path):
   h5_path = os.path.join(scratch_path, 'inputs.h5')
   snps, bcodes, A = util.load_phase_inputs(h5_path)
-
-  prob_const.update({
-    "logP(h)" : math.log(1. / K),
-    "logP(err)"  : math.log(0.01),
-    "logP(err')" : math.log(1 - 0.01),
-  })
 
   print 'loaded {} X {}'.format(len(bcodes), len(snps))
   bcodes, A = util.subsample_reads(bcodes, A, lim=5000)
@@ -51,7 +42,7 @@ def phase(scratch_path, K):
   M_, N_ = A.shape
 
   # hidden haplotypes
-  H, _ = util.get_initial_state(A, K)
+  H, _ = util.get_initial_state(A, hp.K)
 
   # initialize and save intermediate values for fast vectorized
   # computation
@@ -61,12 +52,12 @@ def phase(scratch_path, K):
   print 'initial logP', logP
 
   sidx = 0
-  H_samples = np.zeros((num_iterations, K, N_))
+  H_samples = np.zeros((num_iterations, hp.K, N_))
   for iteration in xrange(num_iterations):
     H_samples[sidx,:,:] = H
     sidx = (sidx + 1) % num_iterations
     print 'iteration', iteration
-    for k_p in xrange(K):
+    for k_p in xrange(hp.K):
       print '  - hap {}, logP: {}'.format(k_p, logP)
       for j_p in xrange(N_):
         
@@ -86,9 +77,9 @@ def phase(scratch_path, K):
         MM_k_p = MM_k + m - mm
         # determine updated read scores for hap k
         S_k_p = (
-          prob_const["logP(h)"] +
-          prob_const["logP(err')"] * M_k_p + 
-          prob_const["logP(err)"] * MM_k_p
+          hp.prob_const["logP(h)"] +
+          hp.prob_const["logP(err')"] * M_k_p + 
+          hp.prob_const["logP(err)"] * MM_k_p
         )
         # compute base logP
         logP_p_vec = np.apply_along_axis(
@@ -97,7 +88,7 @@ def phase(scratch_path, K):
           S[sel_rids,:],
         )
         # compute updated logP using updated read scores for hap k
-        sel_ks = np.ones(K, dtype=bool)
+        sel_ks = np.ones(hp.K, dtype=bool)
         sel_ks[k_p] = False
         logP_n_vec = np.apply_along_axis(
           logsumexp,
@@ -137,13 +128,7 @@ def phase(scratch_path, K):
   h5f.create_dataset('H_samples', data=H_samples)
   h5f.close()
 
-def make_outputs(inbam_path, scratch_path, K):
-  global prob_const
-  prob_const.update({
-    "logP(h)" : math.log(1. / K),
-    "logP(err)"  : math.log(0.01),
-    "logP(err')" : math.log(1 - 0.01),
-  })
+def make_outputs(inbam_path, scratch_path):
   inputsh5_path = os.path.join(scratch_path, 'inputs.h5')
   phaseh5_path = os.path.join(scratch_path, 'phased.h5')
   snps, bcodes, A = util.load_phase_inputs(inputsh5_path)
@@ -188,91 +173,35 @@ def make_outputs(inbam_path, scratch_path, K):
       pass
 
   outdir_path = os.path.join(scratch_path, 'bins')
-  debugdir_path = os.path.join(scratch_path, 'debug')
   util.mkdir_p(outdir_path)
-  util.mkdir_p(debugdir_path)
 
-  debug_assn_path = os.path.join(debugdir_path, 'assn.txt')
-
-  s_idx = np.argsort(W)
-  with open(debug_assn_path, 'w') as fout:
-    for i in np.nditer(s_idx):
-      i = int(i)
-      fout.write('bcode:{}, assn:{}\n'.format(
-        idx_rid_map[i], W[i],
-      ))
-      fout.write('  {}\n'.format(np.array_str(S[i,:],  max_line_width=200)))
-      fout.write('  {}\n'.format(np.array_str(S_n[i,:],max_line_width=200)))
-
+  def get_bcodes_from_rids(rids):
+    bcodes = set()
+    for rid in np.nditer(rids):
+      rid = int(rid)
+      bcodes.add(idx_rid_map[rid])
+    return bcodes
+  
   clusters_map = {}
-  E = np.zeros(K)
-  D = np.empty(M_)
-  D.fill(-1)
   for k in xrange(K):
-    out_path = os.path.join(outdir_path, '{}.bin.txt'.format(k)) 
     sel_rids = np.nonzero(W == k)[0]
-    bcode_set = set()
-    A_k = A[(W == k),:]
-    _, entr, _ = debug.plot_entropy(
-      k,
-      debugdir_path,
-      A_k,
-      debug=False,
-    )
-    num_hsites = np.sum(entr > 0.5)
-    E[k] = num_hsites
-    with open(out_path, 'w') as fout:
-      for rid in np.nditer(sel_rids):
-        rid = int(rid)
-        bcode = idx_rid_map[rid]
-        fout.write('{}\n'.format(bcode))
-        bcode_set.add(bcode)
-        D[rid] = 1. * np.sum(A[rid,:] * H[k,:] < 0)
-    df = pandas.DataFrame(D[sel_rids])
-    print 'cluster', k
-    #print 'fragment mismatches with final assignment', \
-    #  df[df > 2].describe()
-
+    if len(sel_rids) > 0:
+      bcode_set = get_bcodes_from_rids(sel_rids)
+    else:
+      bcode_set = set()
     clusters_map[k] = bcode_set
 
-    debug_path = os.path.join(debugdir_path, 'c.{}'.format(k))
-    util.mkdir_p(debug_path)
-
-  print 'entropy', E
-  df = pandas.DataFrame(D)
-  print 'total fragment mismatches with final assignment', \
-    df[df > 5].describe()
-
-  out_path = os.path.join(scratch_path, 'bins', 'clusters.p')
-  util.write_pickle(out_path, clusters_map)
+  util.make_bin_outputs(
+    clusters_map,
+    inbam_path,
+    outdir_path,
+  )
 
   h5_path = os.path.join(scratch_path, 'bins', 'clusters.h5')
   h5f = h5py.File(h5_path, 'w')
   h5f.create_dataset('H', data=H)
   h5f.create_dataset('W', data=W)
   h5f.close()
-
-  # dump output bams
-  bcode_cidx_map = defaultdict(lambda:None)
-  for cidx, bcodes in clusters_map.items():
-    for bcode in bcodes:
-      bcode_cidx_map[bcode] = cidx
-  
-  inbam = pysam.Samfile(inbam_path, 'rb')
-  unassn_path = os.path.join(scratch_path, 'bins', 'unassigned.bam')
-  bam_fouts = {None:pysam.Samfile(unassn_path, 'wb', template=inbam)}
-  for cidx in clusters_map:
-    outbam_path = os.path.join(scratch_path, 'bins', 'cluster.{}.bam'.format(cidx))
-    bam_fouts[cidx] = pysam.Samfile(outbam_path, 'wb', template=inbam)
-  
-  for read in inbam:
-    bcode = util.get_barcode(read)
-    cidx = bcode_cidx_map[bcode]
-    bam_fouts[cidx].write(read)
-
-  inbam.close()
-  for fout in bam_fouts.values():
-    fout.close()
 
   print 'total haplotype positions', K_ * N_
   print '  - assigned', np.sum(np.abs(H))

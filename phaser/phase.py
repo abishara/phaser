@@ -5,8 +5,9 @@ from collections import defaultdict, Counter
 import numpy as np
 
 from mlib import util
-from mlib.fixedK_ve import phase, make_outputs
-#from mlib.fixedK_betas import phase, make_outputs
+from mlib import hyper_params as hp
+from mlib.fixedK_betas import phase, make_outputs
+#from mlib.fixedK_ve import phase, make_outputs
 
 def phase_barcodes(
   bam_path,
@@ -20,16 +21,15 @@ def phase_barcodes(
 
   util.mkdir_p(scratch_path)
 
+  hp.set_params(K)
   inputs_path = os.path.join(scratch_path, 'inputs.h5')
   phased_path = os.path.join(scratch_path, 'phased.h5')
   if not os.path.isfile(inputs_path):
     util.make_inputs(bam_path, vcf_path, scratch_path, bcodes)
   if not os.path.isfile(phased_path):
-    phase(scratch_path, K)
+    phase(scratch_path)
   clusters_map = make_outputs(scratch_path)
   return clusters_map
-
-
 
 #=========================================================================
 # main
@@ -57,14 +57,15 @@ def main():
   ]
 
   util.mkdir_p(scratch_path)
-  K = 10
   K = 5
+  K = 10
+  hp.set_params(K)
   if cmd == 'mkinputs':
     util.make_inputs(bam_path, vcf_path, scratch_path)
   elif cmd == 'phase':
-    phase(scratch_path, K)
+    phase(scratch_path)
   elif cmd == 'mkoutputs':
-    make_outputs(bam_path, scratch_path, K)
+    make_outputs(bam_path, scratch_path)
   else:
     assert False
 
