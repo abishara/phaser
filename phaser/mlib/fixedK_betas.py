@@ -12,11 +12,11 @@ import pysam
 import util
 import hyper_params as hp
 
-#debug_rid = 1928
 #np.random.seed(0)
 
 (alpha, beta) = (1.0, 0.01)
 (alpha, beta) = (1.0, 0.1)
+DP_alpha = 1
 
 num_iterations = 800
 #num_iterations = 400
@@ -29,6 +29,9 @@ beta_R = (
   - gammaln(alpha) +
   - gammaln(beta)
 )
+
+# compute seed gammas for empty haplotype cluster
+G_seed = None
 
 def get_hap_counts(r, H_k):
   m  = np.abs((H_k * r).clip(min=0))
@@ -51,8 +54,8 @@ def score_beta_site(m, mm):
 
 def score(A, H, C):
   M_, N_ = A.shape
+  K, _ = H.shape
   logP = 0.0
-  K = hp.K
   # match+mismatch counts for each site in each hap K
   M  = np.zeros((K, N_))
   MM = np.zeros((K, N_))
@@ -136,7 +139,250 @@ def sample_haplotype(M, MM, G, H_p, A_k, seed=None):
 
   return H_n
 
+#--------------------------------------------------------------------------
+# merge-split MH move
+#--------------------------------------------------------------------------
+def merge_split(A, H, C, M, MM, G, S):
+
+  M_, N_ = A.shape
+  K, _ = H.shape
+  
+  # draw to reads
+  i = random.randint(0,N_-1)
+  j = random.randint(0,N_-1)
+  j = (i-1)%(N_-1) if i == j else j
+
+  # FIXME direct hints for split operation.  don't split unless there's
+  # some disagreement between the reads...
+
+  s_m = (C == C[i]) | (C ==[j])
+  sel_rids = np.nonzero(s_m)[0]
+
+  r_i = A[i,:]
+  r_j = A[i,:]
+  c_i = C[i]
+  c_j = C[j]
+
+  i_s = np.nonzero(sel_rids == i)[0]
+  j_s = np.nonzero(sel_rids == j)[0]
+
+  # determine launch state
+  A_s = A[s_m,:]
+  M_s, _ = A_s.shape
+
+  # place each read to the closer of read i or read j
+  C_orig = C[s_m]
+  H_orig = H[s_m,:]
+  C_s = np.zeros(M_)
+  for k_s in xrange(M_s):
+    r_k = A_s[k_s]
+    m_i, mm_i = get_hap_counts(r_i, r_k)
+    m_j, mm_j = get_hap_counts(r_j, r_k)
+    C_s[k_s] = 0 if mm_i < mm_j else 1
+  C_s[i_s] = 0
+  C_s[j_s] = 1
+
+  # initial haps
+  H_s = np.zeros((2, N_))
+  H_s[0,:] = H[C[i],:]
+  H_s[1,:] = H[C[j],:]
+
+  # intermediate restricted gibbs scan to get sensible split
+  _, M_s, MM_s, G_s, S_s = score(A_s, H_s, C_s)
+
+  # merge score
+  H_merge = np.zeros((1, N_))
+  C_merge = np.zeros(M_)
+  _, t_M, t_MM, t_G, t_S = score(A_s, H_merge, C_merge)
+  H_merge[0,:] = sample_haplotype(t_M, t_MM, t_G, H_merge[0,:], A_s)
+  logPs_merge, _, _, _, _ = score(A_s, H_merge, C_merge)
+
+  # FIXME technically reads i and j should be fixed during the gibbs scan
+  for local_iteration in xrange(3):
+    H_s, C_s, _ = gibbs_scan(A_s, H_s, C_s, M_s, MM_s, G_s, S_s)
+  H_launch = np.array(H_s)
+  C_launch = np.array(C_s)
+
+  acc_log_prior = gammaln(np.sum(C_s) ==0)
+
+  # split operation
+  if C[i] == C[j]:
+    # transition from launch to final split state
+    H_s, C_s, trans_logP = gibbs_scan(A_s, H_s, C_s, M_s, MM_s, G_s, S_s)
+    logPs_split, _, _, _, _ = score(A_s, H_s, C_s)
+
+    n_ci = np.sum(C_s == 0)
+    n_cj = np.sum(C_s == 1)
+    acc_log_prior = (
+      np.log(DP_alpha) + 
+      gammaln(n_ci) + gammaln(n_cj) - 
+      gammaln(n_ci + n_cj)
+    )
+    acc_log_ll = np.sum(logPs_split) - np.sum(logPs_merge)
+    acc_log_trans = -np.log(trans_logP)
+
+    acc = min(1, np.exp(acc_log_prior + acc_log_ll, + acc_log_trans))
+    if np.random() <= acc:
+      # update split state to global state
+      C_s[(C_s == 0)] = c_i
+      C_s[(C_s == 1)] = K
+      C[s_m] = C_s
+      H = np.vstack(H, np.zeros(1,N_))
+      H[c_i,:] = H_s[0]
+      H[K,:] = H_s[1]
+      # update cached values
+      M[c_i,:] = M_s[0,:]
+      MM[c_i,:] = MM_s[0,:]
+      G[c_i,:,:] = G_s[0,:,:]
+      S[c_i,:] = S_s[0,:]
+      M[K,:] = M_s[1,:]
+      MM[K,:] = MM_s[1,:]
+      G[K,:,:] = G_s[1,:,:]
+      S[K,:] = S_s[1,:]
+
+  # merge operation
+  else:
+    # transition from launch to original split state
+    H_s, C_s, trans_logP = gibbs_scan(
+      A_s, H_launch, C_launch, M_s, MM_s, G_s, S_s,
+      trans_path=C_orig,
+    )
+    logPs_split, _, _, _, _ = score(A_s, H_orig, C_orig)
+
+    n_ci = np.sum(C_orig == 0)
+    n_cj = np.sum(C_orig == 1)
+    acc_log_prior = (
+      gammaln(n_ci + n_cj)  -
+      (gammaln(n_ci) + gammaln(n_cj)) - 
+      np.log(DP_alpha)
+    )
+    acc_log_ll = np.sum(logPs_merge) - np.sum(logPs_split)
+    acc_log_trans = np.log(trans_logP)
+
+    acc = min(1, np.exp(acc_log_prior + acc_log_ll, + acc_log_trans))
+
+    if np.random() <= acc:
+      # update merge state in global state
+      C[s_m] = c_i
+      m = np.ma.make_mask(np.ones(K))
+      m[c_j] = False
+
+      # assigned resampled haplotype for new merged cluster
+      H[c_i] = H_merge[0,:]
+
+      # update cached values for new cluster
+      M[c_i,:] = t_M[0,:]
+      MM[c_i,:] = t_MM[0,:]
+      G[c_i,:,:] = t_G[0,:,:]
+      S[c_i,:] = t_S[0,:]
+
+      # drop old haplotype cluster c_j
+      H = H[m,:]
+      M = M[m,:]
+      MM = MM[m,:]
+      G = G[m,:,:]
+      S = S[m,:]
+
+  return  H, C, M, MM, G, S
+
+#--------------------------------------------------------------------------
+# gibbs scan
+#--------------------------------------------------------------------------
+def gibbs_scan(A, H, C, M, MM, G, S, trans_path=None):
+  trans_logP = 0.
+  M_, N_ = A.shape
+  K, _ = H.shape
+
+  if trans_path:
+    assert trans_path.shape[0] == M_, \
+      "transition path not fully specified, wrong dimension"
+  for i_p in xrange(M_):
+  
+    r_i = A[i_p,:]
+    k_p = C[i_p]
+    k_fixed = None if trans_path == None else trans_path[i_p]
+  
+    # matches with current assignment
+    m, mm = get_hap_counts(r_i, H[k_p,:])
+    
+    # update betas by removing r_j from its current cluster
+    M_p  = M[k_p,:] - m
+    MM_p = MM[k_p,:] - mm
+  
+    assert (M_p >= 0).all()
+    assert (MM_p >= 0).all()
+  
+    G_p = np.array(G[k_p,:,:])
+    for j in np.nditer(np.nonzero(A[i_p,:] != 0)):
+      G_p[j,:] = score_beta_site(M_p[j], MM_p[j])
+  
+    # set assignment to nil for now to resample hap
+    C[i_p] = -1
+    if not (C == k_p).any():
+      H_p = sample_haplotype_seed(r_i)
+    else:
+      A_k = None
+      H_p = sample_haplotype(M_p, MM_p, G_p, H[k_p,:], A_k)
+    C[i_p] = k_p
+  
+    # score read under all haps
+    scores = np.ones(K)
+    for k in xrange(K):
+      # if hap k is currently empty, then resample under this seed r_i
+      if not (C == k).any():
+        H[k,:] = sample_haplotype_seed(r_i)
+        G[k,:,:] = np.array(G_seed)
+      if k == k_p:
+        m, mm = get_hap_counts(r_i, H_p)
+        scores[k] = score_read(m, mm, M_p, MM_p)
+      else:
+        m, mm = get_hap_counts(r_i, H[k,:])
+        scores[k] = score_read(m, mm, M[k,:], MM[k,:])
+  
+    # pick new cluster with prob proportional to scores under K
+    # different betas
+    log_scores = scores - logsumexp(scores)
+    scores = np.exp(log_scores)
+    assn = np.random.multinomial(1, scores)
+    # take fixed transition path if specified
+    if k_fixed:
+      k_n = k_fixed
+    else:
+      k_n = np.nonzero(assn == 1)[0][0]
+    trans_logP += log_scores[k_n]
+  
+    # resample since stayed
+    if k_n == k_p:
+      #A_k = A[(C == k_n),:]
+      A_k = None
+      H[k_n,:] = sample_haplotype(M[k_n,:], MM[k_n,:], G[k_n,:,:], H[k_n,:], A_k)
+    # update haplotypes with new assignment
+    else:
+      # update previous haplotype to remove r_i
+      M[k_p,:] = M_p
+      MM[k_p,:] = MM_p
+      G[k_p,:,:] = G_p
+      H[k_p,:] = H_p
+      C[i_p] = k_n
+      # update next haplotype to add r_i
+      m, mm = get_hap_counts(r_i, H[k_n,:])
+      M[k_n,:]  = M[k_n,:] + m
+      MM[k_n,:] = MM[k_n,:] + mm
+      for j in np.nditer(np.nonzero(A[i_p,:] != 0)):
+        G[k_n,j,:] = score_beta_site(M[k_n,j], MM[k_n,j])
+      # resample updated haplotype
+      A_k = None
+      #A_k = A[(C == k_n),:]
+      H[k_n,:] = sample_haplotype(M[k_n,:], MM[k_n,:], G[k_n,:,:], H[k_n,:], A_k)
+
+  return H, C, trans_logP
+
+#--------------------------------------------------------------------------
+# phasing
+#--------------------------------------------------------------------------
 def phase(scratch_path):
+  global G_seed
+
   h5_path = os.path.join(scratch_path, 'inputs.h5')
   snps, bcodes, A = util.load_phase_inputs(h5_path)
 
@@ -147,19 +393,24 @@ def phase(scratch_path):
   # FIXME change to assert
   print 'number nonzero', np.sum(np.any((A != 0), axis=1))
 
-  K = hp.K
   M_, N_ = A.shape
 
   # hidden haplotypes
-  H, C = util.get_initial_state(A, K)
+  H, C = util.get_initial_state(A, hp.K)
 
   # initialize and save intermediate values for fast vectorized computation
   logP, M, MM, G, S = score(A, H, C)
 
+  # sample initial haplotypes
+  for k in xrange(hp.K):
+    A_k = A[(C == k),:]
+    H[k,:] = sample_haplotype(M[k,:], MM[k,:], G[k,:,:], H[k,:], A_k)
+
   # make sure intermediate tables are all consistent
   def assert_state(A, H, C, M, MM, G):
     fail = False
-    for k in xrange(K):
+    K_, _ = H.shape
+    for k in xrange(K_):
       C_i = (C == k)
       A_k = A[C_i,:]
       for j in xrange(N_):
@@ -169,18 +420,15 @@ def phase(scratch_path):
         assert MM[k,j] == MM_c
         assert (G[k,j,:] == score_beta_site(M_c, MM_c)).all()
 
-  assert_state(A, H, C, M, MM, G)
-
-  # sample initial haplotypes
-  for k in xrange(K):
-    A_k = A[(C == k),:]
-    H[k,:] = sample_haplotype(M[k,:], MM[k,:], G[k,:,:], H[k,:], A_k)
-
-  # compute seed gammas for empty hap
+  # compute seed gammas for empty haplotype cluster
   G_seed = np.zeros((N_, 6))
   G_seed[:,0], G_seed[:,1], G_seed[:,2], G_seed[:,3], G_seed[:,4], G_seed[:,5] = \
     score_beta_site(np.zeros(N_), np.zeros(N_))
- 
+
+  score_beta_site(np.zeros(N_), np.zeros(N_))
+
+  assert_state(A, H, C, M, MM, G)
+
   assert sample_step * num_samples < num_iterations, \
     "{} iterations is not enough for {} samples with step {}".format(
       num_iterations,
@@ -193,101 +441,20 @@ def phase(scratch_path):
   C_samples = np.zeros((num_iterations, M_))
   for iteration in xrange(num_iterations):
 
-    if iteration > 1:
-      break
-
     print 'iteration', iteration
     if iteration % 50 == 0:
       print 'iteration', iteration
+
+    H, C, _ = gibbs_scan(A, H, C, M, MM, G, S)
+
+    assert_state(A, H, C, M, MM, G)
+    H, C, M, MM, G, S =  merge_split(A, H, C, M, MM, G, S)
+    assert_state(A, H, C, M, MM, G)
 
     # save all samples from each iteration for now
     H_samples[sidx,:,:] = H
     C_samples[sidx,:] = C
     sidx = (sidx + 1) % num_iterations
-
-    for i_p in xrange(M_):
-
-      # FIXME remove
-      #if i_p != debug_rid:
-      #  continue
-
-      r_i = A[i_p,:]
-
-      # FIXME remove
-      # skip empty reads that made their way into genotype matrix from bug
-      # in mkinputs
-      if (r_i == 0).all():
-        die
-        continue
-
-      k_p = C[i_p]
-
-      # matches with current assignment
-      m, mm = get_hap_counts(r_i, H[k_p,:])
-      
-      # update betas by removing r_j from its current cluster
-      M_p  = M[k_p,:] - m
-      MM_p = MM[k_p,:] - mm
-
-      assert (M_p >= 0).all()
-      assert (MM_p >= 0).all()
-
-      G_p = np.array(G[k_p,:,:])
-      for j in np.nditer(np.nonzero(A[i_p,:] != 0)):
-        G_p[j,:] = score_beta_site(M_p[j], MM_p[j])
-
-      # set assignment to nil for now to resample hap
-      C[i_p] = -1
-      if not (C == k_p).any():
-        H_p = sample_haplotype_seed(r_i)
-      else:
-        A_k = None
-        H_p = sample_haplotype(M_p, MM_p, G_p, H[k_p,:], A_k)
-      C[i_p] = k_p
-
-      # score read under all haps
-      scores = np.ones(K)
-      for k in xrange(K):
-        # if hap k is currently empty, then resample under this seed r_i
-        if not (C == k).any():
-          H[k,:] = sample_haplotype_seed(r_i)
-          G[k,:,:] = np.array(G_seed)
-        if k == k_p:
-          m, mm = get_hap_counts(r_i, H_p)
-          scores[k] = score_read(m, mm, M_p, MM_p)
-        else:
-          m, mm = get_hap_counts(r_i, H[k,:])
-          scores[k] = score_read(m, mm, M[k,:], MM[k,:])
-
-      # pick new cluster with prob proportional to scores under K
-      # different betas
-      scores = np.exp(scores - logsumexp(scores))
-      assn = np.random.multinomial(1, scores)
-      k_n = np.nonzero(assn == 1)[0][0]
-
-      # resample since stayed
-      if k_n == k_p:
-        #A_k = A[(C == k_n),:]
-        A_k = None
-        H[k_n,:] = sample_haplotype(M[k_n,:], MM[k_n,:], G[k_n,:,:], H[k_n,:], A_k)
-      # update haplotypes with new assignment
-      else:
-        # update previous haplotype to remove r_i
-        M[k_p,:] = M_p
-        MM[k_p,:] = MM_p
-        G[k_p,:,:] = G_p
-        H[k_p,:] = H_p
-        C[i_p] = k_n
-        # update next haplotype to add r_i
-        m, mm = get_hap_counts(r_i, H[k_n,:])
-        M[k_n,:]  = M[k_n,:] + m
-        MM[k_n,:] = MM[k_n,:] + mm
-        for j in np.nditer(np.nonzero(A[i_p,:] != 0)):
-          G[k_n,j,:] = score_beta_site(M[k_n,j], MM[k_n,j])
-        # resample updated haplotype
-        A_k = None
-        #A_k = A[(C == k_n),:]
-        H[k_n,:] = sample_haplotype(M[k_n,:], MM[k_n,:], G[k_n,:,:], H[k_n,:], A_k)
 
   assert_state(A, H, C, M, MM, G)
 
