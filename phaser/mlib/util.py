@@ -210,14 +210,22 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
   print '{} bcodes X {} snps'.format(M, N)
   print 'total genotype entries {}'.format(np.sum(np.abs(A)))
 
-  ## toy example
-  #pass_snps = [
-  #  ('snp0',0),
-  #  ('snp1',0),
-  #  ('snp2',0),
-  #  ('snp3',0),
-  #  ('snp4',0),
-  #]
+  h5_path = os.path.join(scratch_path, 'inputs.h5')
+  h5f = h5py.File(h5_path, 'w')
+  h5f.create_dataset('snps', data=pass_snps)
+  h5f.create_dataset('bcodes', data=pass_bcodes)
+  h5f.create_dataset('genotypes', data=A)
+  h5f.close()
+
+def make_inputs(d1, d2, scratch_path):
+  # toy example
+  pass_snps = [
+    ('snp0',0),
+    ('snp1',0),
+    ('snp2',0),
+    ('snp3',0),
+    ('snp4',0),
+  ]
   #pass_bcodes = [
   #  'bcode0',
   #  'bcode1',
@@ -232,30 +240,30 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
   #[1,1,1,-1,1],
   #[1,1,1,1,-1],
   #])
-  #pass_bcodes = [
-  #  'bcode0',
-  #  'bcode1',
-  #  'bcode2',
-  #  'bcode3',
-  #  'bcode4',
-  #  'bcode5',
-  #  'bcode6',
-  #  'bcode7',
-  #  'bcode8',
-  #  'bcode9',
-  #]
-  #A = np.array([
-  #[-1,1,1,1,1],
-  #[1,-1,1,1,1],
-  #[1,1,-1,1,1],
-  #[1,1,1,-1,1],
-  #[1,1,1,1,-1],
-  #[-1,1,1,1,1],
-  #[1,-1,1,1,1],
-  #[1,1,-1,1,1],
-  #[1,1,1,-1,1],
-  #[1,1,1,1,-1],
-  #])
+  pass_bcodes = [
+    'bcode0',
+    'bcode1',
+    'bcode2',
+    'bcode3',
+    'bcode4',
+    'bcode5',
+    'bcode6',
+    'bcode7',
+    'bcode8',
+    'bcode9',
+  ]
+  A = np.array([
+  [-1,1,1,1,1],
+  [1,-1,1,1,1],
+  [1,1,-1,1,1],
+  [1,1,1,-1,1],
+  [1,1,1,1,-1],
+  [-1,1,1,1,1],
+  [1,-1,1,1,1],
+  [1,1,-1,1,1],
+  [1,1,1,-1,1],
+  [1,1,1,1,-1],
+  ])
 
 
   h5_path = os.path.join(scratch_path, 'inputs.h5')
@@ -311,8 +319,12 @@ def get_initial_state(A, K):
   M_, N_ = A.shape
 
   # get inspired by some reads to initialize the hidden haplotypes
-  H = np.zeros((K, N_))
+  H = np.ones((K, N_))
+  ## FIXME not sure of implication if 0s persist beyond init....
+  #H = np.zeros((K, N_))
   C = np.random.choice(K, M_)
+
+  return H, C
 
   # pass through reads and greedily assign to cluster with the fewest
   # mismatches per assignment
@@ -327,9 +339,10 @@ def get_initial_state(A, K):
     C[i] = k_c
 
   # every cluster must have at least one read for now
+  assert M_ >= K, "initial K={} too high, more than {} reads".format(K, M_)
   for k in xrange(K):
     if not (C == k).any():
-      C[k] = k
+      C[k] = k 
     print '{} reads assigned to hap {}'.format(
       np.sum(C == k),
       k

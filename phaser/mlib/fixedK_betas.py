@@ -12,10 +12,11 @@ import pysam
 import util
 import hyper_params as hp
 
-#np.random.seed(0)
+np.random.seed(0)
+random.seed(0)
 
-(alpha, beta) = (1.0, 0.01)
 (alpha, beta) = (1.0, 0.1)
+(alpha, beta) = (1.0, 0.01)
 DP_alpha = 1
 
 num_iterations = 800
@@ -146,17 +147,21 @@ def merge_split(A, H, C, M, MM, G, S):
 
   M_, N_ = A.shape
   K, _ = H.shape
-  
+
   # draw to reads
   i = random.randint(0,N_-1)
   j = random.randint(0,N_-1)
   j = (i-1)%(N_-1) if i == j else j
+  if j < i:
+    i,j = j,i
 
   # FIXME direct hints for split operation.  don't split unless there's
   # some disagreement between the reads...
 
-  s_m = (C == C[i]) | (C ==[j])
+  s_m = (C == C[i]) | (C == C[j])
   sel_rids = np.nonzero(s_m)[0]
+
+  #print 'i,j', i,j
 
   r_i = A[i,:]
   r_j = A[i,:]
@@ -168,17 +173,25 @@ def merge_split(A, H, C, M, MM, G, S):
 
   # determine launch state
   A_s = A[s_m,:]
-  M_s, _ = A_s.shape
+  num_s, _ = A_s.shape
 
-  # place each read to the closer of read i or read j
+  m = np.zeros(K)
+  m[c_i] = 1
+  m[c_j] = 1
+  m = np.ma.make_mask(m)
+
+  H_orig = H[m,:]
   C_orig = C[s_m]
-  H_orig = H[s_m,:]
-  C_s = np.zeros(M_)
-  for k_s in xrange(M_s):
+  C_orig[(C_orig == c_i)] = 0
+  C_orig[(C_orig == c_j)] = 1
+  
+  # place each read to the closer of read i or read j
+  C_s = np.zeros(num_s, dtype=np.int)
+  for k_s in xrange(num_s):
     r_k = A_s[k_s]
     m_i, mm_i = get_hap_counts(r_i, r_k)
     m_j, mm_j = get_hap_counts(r_j, r_k)
-    C_s[k_s] = 0 if mm_i < mm_j else 1
+    C_s[k_s] = 0 if np.sum(mm_i) < np.sum(mm_j) else 1
   C_s[i_s] = 0
   C_s[j_s] = 1
 
@@ -191,11 +204,12 @@ def merge_split(A, H, C, M, MM, G, S):
   _, M_s, MM_s, G_s, S_s = score(A_s, H_s, C_s)
 
   # merge score
-  H_merge = np.zeros((1, N_))
-  C_merge = np.zeros(M_)
+  H_merge = np.ones((1, N_))
+  C_merge = np.zeros(num_s, dtype=np.int)
+
   _, t_M, t_MM, t_G, t_S = score(A_s, H_merge, C_merge)
-  H_merge[0,:] = sample_haplotype(t_M, t_MM, t_G, H_merge[0,:], A_s)
-  logPs_merge, _, _, _, _ = score(A_s, H_merge, C_merge)
+  H_merge[0,:] = sample_haplotype(t_M[0,:], t_MM[0,:], t_G[0,:,:], H_merge[0,:], None)
+  logPs_merge, t_M, t_MM, t_G, t_S = score(A_s, H_merge, C_merge)
 
   # FIXME technically reads i and j should be fixed during the gibbs scan
   for local_iteration in xrange(3):
@@ -219,36 +233,53 @@ def merge_split(A, H, C, M, MM, G, S):
       gammaln(n_ci + n_cj)
     )
     acc_log_ll = np.sum(logPs_split) - np.sum(logPs_merge)
-    acc_log_trans = -np.log(trans_logP)
+    acc_log_trans = -trans_logP
 
-    acc = min(1, np.exp(acc_log_prior + acc_log_ll, + acc_log_trans))
-    if np.random() <= acc:
+    acc = min(1, np.exp(acc_log_prior + acc_log_ll + acc_log_trans))
+    if random.random() <= acc:
+
       # update split state to global state
       C_s[(C_s == 0)] = c_i
       C_s[(C_s == 1)] = K
       C[s_m] = C_s
-      H = np.vstack(H, np.zeros(1,N_))
+      H = np.vstack([H, H_s[1]])
       H[c_i,:] = H_s[0]
-      H[K,:] = H_s[1]
-      # update cached values
+      # update cached values and append to end for new cluster
       M[c_i,:] = M_s[0,:]
       MM[c_i,:] = MM_s[0,:]
       G[c_i,:,:] = G_s[0,:,:]
       S[c_i,:] = S_s[0,:]
+
+      M  = np.vstack([M, np.zeros(N_)])
+      MM = np.vstack([MM, np.zeros(N_)])
+      G_p = G
+      G = np.zeros((K+1,N_,6))
+      G[:K,:,:] = G_p
+      S = np.vstack([S, np.zeros(1)])
+
       M[K,:] = M_s[1,:]
       MM[K,:] = MM_s[1,:]
       G[K,:,:] = G_s[1,:,:]
       S[K,:] = S_s[1,:]
 
+    else:
+      pass
+
   # merge operation
   else:
+    #print 'merge operation'
+
     # transition from launch to original split state
     H_s, C_s, trans_logP = gibbs_scan(
       A_s, H_launch, C_launch, M_s, MM_s, G_s, S_s,
       trans_path=C_orig,
     )
-    logPs_split, _, _, _, _ = score(A_s, H_orig, C_orig)
+    #print 'C_orig', C_orig
+    #print 'C_launch', C_launch
+    #print 'trans_logP', trans_logP
+    #die
 
+    logPs_split, _, _, _, _ = score(A_s, H_orig, C_orig)
     n_ci = np.sum(C_orig == 0)
     n_cj = np.sum(C_orig == 1)
     acc_log_prior = (
@@ -257,15 +288,21 @@ def merge_split(A, H, C, M, MM, G, S):
       np.log(DP_alpha)
     )
     acc_log_ll = np.sum(logPs_merge) - np.sum(logPs_split)
-    acc_log_trans = np.log(trans_logP)
+    acc_log_trans = trans_logP
+    #print 'acc_log_prior', acc_log_prior
+    #print 'logPs_merge', logPs_merge
+    #print 'logPs_split', logPs_split
+    #print 'acc_log_ll', acc_log_ll
+    #print 'trans_logP', trans_logP
 
-    acc = min(1, np.exp(acc_log_prior + acc_log_ll, + acc_log_trans))
+    acc = min(1, np.exp(acc_log_prior + acc_log_ll + acc_log_trans))
 
-    if np.random() <= acc:
+    if random.random() <= acc:
       # update merge state in global state
       C[s_m] = c_i
-      m = np.ma.make_mask(np.ones(K))
-      m[c_j] = False
+      m = np.ones(K)
+      m[c_j] = 0
+      m = np.ma.make_mask(m)
 
       # assigned resampled haplotype for new merged cluster
       H[c_i] = H_merge[0,:]
@@ -282,6 +319,20 @@ def merge_split(A, H, C, M, MM, G, S):
       MM = MM[m,:]
       G = G[m,:,:]
       S = S[m,:]
+      # shift index assignments down
+      C[C > c_j] -= 1
+
+      #print 'new state'
+      #print 'mask', m
+      #print 'H[3,:] ', H[3,:]
+      #print 'M[3,:] ', M[3,:]
+      #print 'MM[3,:]', MM[3,:]
+      #print 'reads'
+      #print 
+      #print A[(C == 3)]
+
+    else:
+      pass
 
   return  H, C, M, MM, G, S
 
@@ -293,14 +344,14 @@ def gibbs_scan(A, H, C, M, MM, G, S, trans_path=None):
   M_, N_ = A.shape
   K, _ = H.shape
 
-  if trans_path:
+  if trans_path is not None:
     assert trans_path.shape[0] == M_, \
       "transition path not fully specified, wrong dimension"
   for i_p in xrange(M_):
   
     r_i = A[i_p,:]
     k_p = C[i_p]
-    k_fixed = None if trans_path == None else trans_path[i_p]
+    k_fixed = None if trans_path is None else trans_path[i_p]
   
     # matches with current assignment
     m, mm = get_hap_counts(r_i, H[k_p,:])
@@ -345,7 +396,7 @@ def gibbs_scan(A, H, C, M, MM, G, S, trans_path=None):
     scores = np.exp(log_scores)
     assn = np.random.multinomial(1, scores)
     # take fixed transition path if specified
-    if k_fixed:
+    if k_fixed is not None:
       k_n = k_fixed
     else:
       k_n = np.nonzero(assn == 1)[0][0]
@@ -417,6 +468,7 @@ def phase(scratch_path):
         M_c = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == H[k, j], j]))
         MM_c = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == -H[k, j], j]))
         assert M[k,j]  == M_c
+        assert M[k,j]  == M_c
         assert MM[k,j] == MM_c
         assert (G[k,j,:] == score_beta_site(M_c, MM_c)).all()
 
@@ -437,24 +489,28 @@ def phase(scratch_path):
     )
 
   sidx = 0
-  H_samples = np.zeros((num_iterations, K, N_))
-  C_samples = np.zeros((num_iterations, M_))
+  H_samples = []
+  C_samples = []
+  #H_samples = np.zeros((num_iterations, K, N_))
+  #C_samples = np.zeros((num_iterations, M_))
   for iteration in xrange(num_iterations):
 
     print 'iteration', iteration
     if iteration % 50 == 0:
       print 'iteration', iteration
 
-    H, C, _ = gibbs_scan(A, H, C, M, MM, G, S)
+    #H, C, _ = gibbs_scan(A, H, C, M, MM, G, S)
 
     assert_state(A, H, C, M, MM, G)
     H, C, M, MM, G, S =  merge_split(A, H, C, M, MM, G, S)
     assert_state(A, H, C, M, MM, G)
 
-    # save all samples from each iteration for now
-    H_samples[sidx,:,:] = H
-    C_samples[sidx,:] = C
-    sidx = (sidx + 1) % num_iterations
+    H_samples.append(H)
+    C_samples.append(C)
+    ## save all samples from each iteration for now
+    #H_samples[sidx,:,:] = H
+    #C_samples[sidx,:] = C
+    #sidx = (sidx + 1) % num_iterations
 
   assert_state(A, H, C, M, MM, G)
 
