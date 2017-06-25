@@ -33,6 +33,15 @@ def load_pickle(path):
 # 10x
 #--------------------------------------------------------------------------
 
+def get_label(read):
+  filt_list = filter(lambda(k, v): k == 'AB', read.tags)
+  assert len(filt_list) <= 1
+  if filt_list == []: 
+    return None
+  else:
+    label = filt_list[0][1].strip()
+    return label
+
 def get_barcode(read):
   filt_list = filter(lambda(k, v): k in ['BC', 'BX'], read.tags)
   assert len(filt_list) <= 1
@@ -63,25 +72,27 @@ def get_variants(vcf_path):
   return var_map
 
 #--------------------------------------------------------------------------
-# build/load input Read X Barcode matrix
+# build/load input read X barcode matrix
 #--------------------------------------------------------------------------
 
 def load_phase_inputs(h5_path):
   h5f = h5py.File(h5_path, 'r')
   snps = map(lambda(k,v): (str(k),int(v)), h5f['snps'])
   bcodes = map(lambda(k): str(k), h5f['bcodes'])
+  true_labels = map(lambda(k): str(k), h5f['true_labels'])
   A = np.array(h5f['genotypes'])
   h5f.close()
   A = get_normalized_genotypes(A)
-  return snps, bcodes, A
+  return snps, bcodes, A, true_labels
 
 def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
-  
+
   var_map = get_variants(vcf_path)
 
   bam_fin = pysam.Samfile(bam_path, 'rb')
   snp_bcode_counts_map = defaultdict(lambda:defaultdict(Counter))
   seen_set = set()
+  bcode_label_map = {}
   for (i, target_snp) in enumerate(sorted(var_map)):
     (ctg, pos) = target_snp
     if i % 500 == 0:
@@ -100,6 +111,9 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
       #print 'snp {}:{} depth {}'.format(ctg, pos, pcol.n)
       for read in pcol.pileups:
         bcode = get_barcode(read.alignment)
+        label = get_label(read.alignment)
+        if label:
+          bcode_label_map[bcode] = label
         if bcode == None:
           continue
         # skip gapped alignment positions
@@ -172,6 +186,7 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
     for bcode in bcode_counts_map:
       bcode_snp_counts[bcode] += 1
 
+  true_labels = []
   pass_bcodes = []
   for bcode, cnt in bcode_snp_counts.most_common():
     # skip if barcode not in subset specified
@@ -179,6 +194,7 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
       continue
     if cnt > 1:
       pass_bcodes.append(bcode)
+      true_labels.append(bcode_label_map[bcode])
   pass_bcodes_set = set(pass_bcodes)
 
   # create input matrix
@@ -215,9 +231,10 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
   h5f.create_dataset('snps', data=pass_snps)
   h5f.create_dataset('bcodes', data=pass_bcodes)
   h5f.create_dataset('genotypes', data=A)
+  h5f.create_dataset('true_labels', data=true_labels)
   h5f.close()
 
-def make_inputs(d1, d2, scratch_path):
+def make_inputs_toy(d1, d2, scratch_path):
   # toy example
   pass_snps = [
     ('snp0',0),
@@ -240,6 +257,13 @@ def make_inputs(d1, d2, scratch_path):
   #[1,1,1,-1,1],
   #[1,1,1,1,-1],
   #])
+  #true_labels = [
+  #  'c0',
+  #  'c1',
+  #  'c2',
+  #  'c3',
+  #  'c4',
+  #]
   pass_bcodes = [
     'bcode0',
     'bcode1',
@@ -264,13 +288,25 @@ def make_inputs(d1, d2, scratch_path):
   [1,1,1,-1,1],
   [1,1,1,1,-1],
   ])
-
+  true_labels = [
+    'c0',
+    'c1',
+    'c2',
+    'c3',
+    'c4',
+    'c0',
+    'c1',
+    'c2',
+    'c3',
+    'c4',
+  ]
 
   h5_path = os.path.join(scratch_path, 'inputs.h5')
   h5f = h5py.File(h5_path, 'w')
   h5f.create_dataset('snps', data=pass_snps)
   h5f.create_dataset('bcodes', data=pass_bcodes)
   h5f.create_dataset('genotypes', data=A)
+  h5f.create_dataset('true_labels', data=true_labels)
   h5f.close()
 
 #--------------------------------------------------------------------------
@@ -317,48 +353,43 @@ def make_bin_outputs(
 
 def get_initial_state(A, K):
   M_, N_ = A.shape
+  H = np.ones((1,N_))
+  C = np.zeros(M_, dtype=np.int)
+  return H, C
 
   # get inspired by some reads to initialize the hidden haplotypes
   H = np.ones((K, N_))
   ## FIXME not sure of implication if 0s persist beyond init....
-  #H = np.zeros((K, N_))
-  C = np.random.choice(K, M_)
+  #H = np.ones((1,N_))
+  ##H = np.zeros((K, N_))
+  #C = np.random.choice(K, M_)
+  ## pass through reads and greedily assign to cluster with the fewest
+  ## mismatches per assignment
+  #for i in xrange(M_):
+  #  r = A[i,:]
+  #  mms = np.zeros(K)
+  #  for k in xrange(K):
+  #    mms[k] = np.sum(np.abs((H[k,:] * np.sign(r)).clip(max=0)))
+  #  k_c = np.argmin(mms)
+  #  # overwrite current haplotype value with this read's nonzero calls
+  #  H[k_c,(r != 0)] = np.sign(r[r != 0])
+  #  C[i] = k_c
 
-  return H, C
+  ## every cluster must have at least one read for now
+  #assert M_ >= K, "initial K={} too high, more than {} reads".format(K, M_)
+  #for k in xrange(K):
+  #  if not (C == k).any():
+  #    C[k] = k 
+  #  print '{} reads assigned to hap {}'.format(
+  #    np.sum(C == k),
+  #    k
+  #  )
+  #print 'init H'
+  #print H
+  #print 'init C'
+  #print C
 
-  # pass through reads and greedily assign to cluster with the fewest
-  # mismatches per assignment
-  for i in xrange(M_):
-    r = A[i,:]
-    mms = np.zeros(K)
-    for k in xrange(K):
-      mms[k] = np.sum(np.abs((H[k,:] * np.sign(r)).clip(max=0)))
-    k_c = np.argmin(mms)
-    # overwrite current haplotype value with this read's nonzero calls
-    H[k_c,(r != 0)] = np.sign(r[r != 0])
-    C[i] = k_c
-
-  # every cluster must have at least one read for now
-  assert M_ >= K, "initial K={} too high, more than {} reads".format(K, M_)
-  for k in xrange(K):
-    if not (C == k).any():
-      C[k] = k 
-    print '{} reads assigned to hap {}'.format(
-      np.sum(C == k),
-      k
-    )
-  print 'init H'
-  print H
-  print 'init C'
-  print C
-
-  ## FIXME remove
-  ## seed with answer (for toy example)
-  #H = np.array(A[:5,:])
-  #C = np.arange(M_)
-  #C = C % K
-
-  return H, C
+  #return H, C
 
 def get_normalized_genotypes(_A):
   A = np.array(_A)

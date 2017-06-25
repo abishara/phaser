@@ -34,6 +34,33 @@ beta_R = (
 # compute seed gammas for empty haplotype cluster
 G_seed = None
 
+#--------------------------------------------------------------------------
+# temporary stuff to score simulation moves
+#--------------------------------------------------------------------------
+def score_assignment(H, C, labels_map):
+
+  def pp(cnt):
+    for k, v in cnt.most_common():
+      print '{}:{},'.format(k,v),
+    print
+    return
+
+  K, _ = H.shape
+  accs = []
+  for k in xrange(K):
+    members = np.nonzero(C == k)[0]
+    total = len(members)
+    cnt = Counter(map(lambda(m):labels_map[m], members))
+    acc = -1 if total == 0 else 1.* cnt.most_common()[0][1] / total
+    accs.append(acc)
+    #print 'cluster', k 
+    #pp(cnt)
+  return sorted(accs)
+    
+#--------------------------------------------------------------------------
+# helpers
+#--------------------------------------------------------------------------
+
 def get_hap_counts(r, H_k):
   m  = np.abs((H_k * r).clip(min=0))
   mm = np.abs((H_k * r).clip(max=0))
@@ -219,6 +246,7 @@ def merge_split(A, H, C, M, MM, G, S):
 
   acc_log_prior = gammaln(np.sum(C_s) ==0)
 
+  taken = False
   # split operation
   if C[i] == C[j]:
     # transition from launch to final split state
@@ -237,11 +265,16 @@ def merge_split(A, H, C, M, MM, G, S):
 
     acc = min(1, np.exp(acc_log_prior + acc_log_ll + acc_log_trans))
     if random.random() <= acc:
+      print 'split taken!', acc
+      taken = True
 
       # update split state to global state
-      C_s[(C_s == 0)] = c_i
-      C_s[(C_s == 1)] = K
+      m0 = (C_s == 0)
+      m1 = (C_s == 1)
+      C_s[m0] = c_i
+      C_s[m1] = K
       C[s_m] = C_s
+
       H = np.vstack([H, H_s[1]])
       H[c_i,:] = H_s[0]
       # update cached values and append to end for new cluster
@@ -298,6 +331,8 @@ def merge_split(A, H, C, M, MM, G, S):
     acc = min(1, np.exp(acc_log_prior + acc_log_ll + acc_log_trans))
 
     if random.random() <= acc:
+      print 'merge taken!'
+      taken = True
       # update merge state in global state
       C[s_m] = c_i
       m = np.ones(K)
@@ -334,7 +369,7 @@ def merge_split(A, H, C, M, MM, G, S):
     else:
       pass
 
-  return  H, C, M, MM, G, S
+  return taken, H, C, M, MM, G, S
 
 #--------------------------------------------------------------------------
 # gibbs scan
@@ -435,7 +470,7 @@ def phase(scratch_path):
   global G_seed
 
   h5_path = os.path.join(scratch_path, 'inputs.h5')
-  snps, bcodes, A = util.load_phase_inputs(h5_path)
+  snps, bcodes, A, true_labels = util.load_phase_inputs(h5_path)
 
   print 'loaded {} X {}'.format(len(bcodes), len(snps))
   bcodes, A = util.subsample_reads(bcodes, A, lim=5000)
@@ -444,16 +479,19 @@ def phase(scratch_path):
   # FIXME change to assert
   print 'number nonzero', np.sum(np.any((A != 0), axis=1))
 
+  true_labels_map = dict(enumerate(true_labels))
+
   M_, N_ = A.shape
 
   # hidden haplotypes
   H, C = util.get_initial_state(A, hp.K)
+  K, _ = H.shape
 
   # initialize and save intermediate values for fast vectorized computation
   logP, M, MM, G, S = score(A, H, C)
 
   # sample initial haplotypes
-  for k in xrange(hp.K):
+  for k in xrange(K):
     A_k = A[(C == k),:]
     H[k,:] = sample_haplotype(M[k,:], MM[k,:], G[k,:,:], H[k,:], A_k)
 
@@ -467,6 +505,7 @@ def phase(scratch_path):
       for j in xrange(N_):
         M_c = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == H[k, j], j]))
         MM_c = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == -H[k, j], j]))
+        assert M[k,j]  == M_c
         assert M[k,j]  == M_c
         assert M[k,j]  == M_c
         assert MM[k,j] == MM_c
@@ -493,16 +532,25 @@ def phase(scratch_path):
   C_samples = []
   #H_samples = np.zeros((num_iterations, K, N_))
   #C_samples = np.zeros((num_iterations, M_))
+  print 'initial  accuracies', score_assignment(H, C, true_labels_map)
   for iteration in xrange(num_iterations):
 
-    print 'iteration', iteration
+    #print 'iteration', iteration
     if iteration % 50 == 0:
       print 'iteration', iteration
+      print '  - accuracies', score_assignment(H, C, true_labels_map)
 
     #H, C, _ = gibbs_scan(A, H, C, M, MM, G, S)
 
     assert_state(A, H, C, M, MM, G)
-    H, C, M, MM, G, S =  merge_split(A, H, C, M, MM, G, S)
+    taken, H, C, M, MM, G, S = merge_split(A, H, C, M, MM, G, S)
+    if taken:
+      for i in xrange(3):
+        H, C, _ = gibbs_scan(A, H, C, M, MM, G, S)
+
+      #print 'finished on taken move!'
+      #print '  - accuracies', score_assignment(H, C, true_labels_map)
+      #die
     assert_state(A, H, C, M, MM, G)
 
     H_samples.append(H)
