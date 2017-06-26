@@ -358,7 +358,6 @@ def get_initial_state(A, K):
   return H, C
 
   # get inspired by some reads to initialize the hidden haplotypes
-  H = np.ones((K, N_))
   ## FIXME not sure of implication if 0s persist beyond init....
   #H = np.ones((1,N_))
   ##H = np.zeros((K, N_))
@@ -397,7 +396,7 @@ def get_normalized_genotypes(_A):
   A[A<0] = -1
   return A
 
-def subsample_reads(bcodes, A, lim=5000):
+def subsample_reads(bcodes, A, true_labels, lim=5000):
   # subsample most informative barcodes
   A_z = np.sum((A == 0), axis=1)
   s_idx = np.argsort(A_z)
@@ -408,6 +407,7 @@ def subsample_reads(bcodes, A, lim=5000):
   last = min(lim, A.shape[0])-1
   print 'min occupancy', A.shape[1] - A_z[s_idx][last]
   bcodes = map(str, np.array(bcodes)[s_idx][:lim])
-  return bcodes, A
+  true_labels = map(str, np.array(true_labels)[s_idx][:lim])
+  return bcodes, A, true_labels
 
 
