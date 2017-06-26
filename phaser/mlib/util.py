@@ -234,7 +234,8 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
   h5f.create_dataset('true_labels', data=true_labels)
   h5f.close()
 
-def make_inputs_toy(d1, d2, scratch_path):
+def make_inputs(d1, d2, scratch_path):
+#def make_inputs_toy(d1, d2, scratch_path):
   # toy example
   pass_snps = [
     ('snp0',0),
@@ -275,6 +276,17 @@ def make_inputs_toy(d1, d2, scratch_path):
     'bcode7',
     'bcode8',
     'bcode9',
+
+    'bcode15',
+    'bcode16',
+    'bcode17',
+    'bcode18',
+    'bcode19',
+    'bcode25',
+    'bcode26',
+    'bcode27',
+    'bcode28',
+    'bcode29',
   ]
   A = np.array([
   [-1,1,1,1,1],
@@ -287,8 +299,30 @@ def make_inputs_toy(d1, d2, scratch_path):
   [1,1,-1,1,1],
   [1,1,1,-1,1],
   [1,1,1,1,-1],
+
+  [-1,1,1,1,1],
+  [1,-1,1,1,1],
+  [1,1,-1,1,1],
+  [1,1,1,-1,1],
+  [1,1,1,1,-1],
+  [-1,1,1,1,1],
+  [1,-1,1,1,1],
+  [1,1,-1,1,1],
+  [1,1,1,-1,1],
+  [1,1,1,1,-1],
   ])
   true_labels = [
+    'c0',
+    'c1',
+    'c2',
+    'c3',
+    'c4',
+    'c0',
+    'c1',
+    'c2',
+    'c3',
+    'c4',
+
     'c0',
     'c1',
     'c2',
@@ -353,9 +387,9 @@ def make_bin_outputs(
 
 def get_initial_state(A, K):
   M_, N_ = A.shape
-  H = np.ones((1,N_))
+  K = 1
   C = np.zeros(M_, dtype=np.int)
-  return H, C
+  return K, C
 
   # get inspired by some reads to initialize the hidden haplotypes
   ## FIXME not sure of implication if 0s persist beyond init....
