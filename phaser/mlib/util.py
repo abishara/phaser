@@ -95,6 +95,9 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
   bcode_label_map = {}
   for (i, target_snp) in enumerate(sorted(var_map)):
     (ctg, pos) = target_snp
+    if ctg in ['contig-100_6', 'contig-100_10']:
+      print 'skipping bad ctg', ctg
+      continue
     if i % 500 == 0:
       print 'num snps', i
       #if i > 400:
@@ -234,7 +237,7 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
   h5f.create_dataset('true_labels', data=true_labels)
   h5f.close()
 
-def make_inputs(d1, d2, scratch_path):
+def make_inputs_toy(d1, d2, scratch_path):
 #def make_inputs_toy(d1, d2, scratch_path):
   # toy example
   pass_snps = [
@@ -385,44 +388,46 @@ def make_bin_outputs(
   for fout in bam_fouts.values():
     fout.close()
 
-def get_initial_state(A, K):
+def get_initial_state(A):
   M_, N_ = A.shape
   K = 1
   C = np.zeros(M_, dtype=np.int)
   return K, C
 
+def get_initial_state_fixedK(A, K):
   # get inspired by some reads to initialize the hidden haplotypes
-  ## FIXME not sure of implication if 0s persist beyond init....
-  #H = np.ones((1,N_))
-  ##H = np.zeros((K, N_))
-  #C = np.random.choice(K, M_)
-  ## pass through reads and greedily assign to cluster with the fewest
-  ## mismatches per assignment
-  #for i in xrange(M_):
-  #  r = A[i,:]
-  #  mms = np.zeros(K)
-  #  for k in xrange(K):
-  #    mms[k] = np.sum(np.abs((H[k,:] * np.sign(r)).clip(max=0)))
-  #  k_c = np.argmin(mms)
-  #  # overwrite current haplotype value with this read's nonzero calls
-  #  H[k_c,(r != 0)] = np.sign(r[r != 0])
-  #  C[i] = k_c
+  # FIXME not sure of implication if 0s persist beyond init....
+  M_, N_ = A.shape
+  #H = np.ones((K,N_))
+  H = np.zeros((K,N_))
+  C = np.random.choice(K, M_)
+  # pass through reads and greedily assign to cluster with the fewest
+  # mismatches per assignment
+  for i in xrange(M_):
+    r = A[i,:]
+    mms = np.zeros(K)
+    for k in xrange(K):
+      mms[k] = np.sum(np.abs((H[k,:] * np.sign(r)).clip(max=0)))
+    k_c = np.argmin(mms)
+    # overwrite current haplotype value with this read's nonzero calls
+    H[k_c,(r != 0)] = np.sign(r[r != 0])
+    C[i] = k_c
 
-  ## every cluster must have at least one read for now
-  #assert M_ >= K, "initial K={} too high, more than {} reads".format(K, M_)
-  #for k in xrange(K):
-  #  if not (C == k).any():
-  #    C[k] = k 
-  #  print '{} reads assigned to hap {}'.format(
-  #    np.sum(C == k),
-  #    k
-  #  )
-  #print 'init H'
-  #print H
-  #print 'init C'
-  #print C
+  # every cluster must have at least one read for now
+  assert M_ >= K, "initial K={} too high, more than {} reads".format(K, M_)
+  for k in xrange(K):
+    if not (C == k).any():
+      C[k] = k 
+    print '{} reads assigned to hap {}'.format(
+      np.sum(C == k),
+      k
+    )
+  print 'init H'
+  print H
+  print 'init C'
+  print C
 
-  #return H, C
+  return H, C
 
 def get_normalized_genotypes(_A):
   A = np.array(_A)

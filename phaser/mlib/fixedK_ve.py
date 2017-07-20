@@ -33,16 +33,16 @@ def score(A, H):
 
 def phase(scratch_path):
   h5_path = os.path.join(scratch_path, 'inputs.h5')
-  snps, bcodes, A = util.load_phase_inputs(h5_path)
+  snps, bcodes, A, _ = util.load_phase_inputs(h5_path)
 
   print 'loaded {} X {}'.format(len(bcodes), len(snps))
-  bcodes, A = util.subsample_reads(bcodes, A, lim=5000)
+  bcodes, A, _ = util.subsample_reads(bcodes, A, bcodes, lim=5000)
   print '  - subsample to {} X {}'.format(len(bcodes), len(snps))
 
   M_, N_ = A.shape
 
   # hidden haplotypes
-  H, _ = util.get_initial_state(A, hp.K)
+  H, _ = util.get_initial_state_fixedK(A, hp.K)
 
   # initialize and save intermediate values for fast vectorized
   # computation
@@ -131,14 +131,14 @@ def phase(scratch_path):
 def make_outputs(inbam_path, scratch_path):
   inputsh5_path = os.path.join(scratch_path, 'inputs.h5')
   phaseh5_path = os.path.join(scratch_path, 'phased.h5')
-  snps, bcodes, A = util.load_phase_inputs(inputsh5_path)
+  snps, bcodes, A, _ = util.load_phase_inputs(inputsh5_path)
   h5f = h5py.File(phaseh5_path, 'r')
   H = np.array(h5f['H'])
   H_samples = np.array(h5f['H_samples'])
   h5f.close()
 
   print 'loaded {} X {}'.format(len(bcodes), len(snps))
-  bcodes, A = util.subsample_reads(bcodes, A, lim=5000)
+  bcodes, A, _ = util.subsample_reads(bcodes, A, bcodes, lim=5000)
   print '  - subsample to {} X {}'.format(len(bcodes), len(snps))
 
   K, _ = H.shape

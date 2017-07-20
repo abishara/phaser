@@ -57,8 +57,8 @@ def main():
   ]
 
   util.mkdir_p(scratch_path)
-  K = 10
   K = 5
+  K = 10
   hp.set_params(K)
   if cmd == 'mkinputs':
     util.make_inputs(bam_path, vcf_path, scratch_path)
