@@ -19,10 +19,7 @@ random.seed(0)
 (alpha, beta) = (0.1, 0.1)
 DP_alpha = 1
 
-num_iterations = 800
-#num_iterations = 400
-num_samples = 50
-sample_step = 2
+num_iterations = 400
 
 # normalization constant for the beta
 beta_R = (
@@ -626,14 +623,6 @@ def phase(scratch_path):
 
   assert_state(A, K, C, M, MM, G)
 
-  assert sample_step * num_samples < num_iterations, \
-    "{} iterations is not enough for {} samples with step {}".format(
-      num_iterations,
-      num_samples,
-      sample_step,
-    )
-
-  sidx = 0
   C_samples = []
   print 'initial  accuracies', score_assignment(K, C, true_labels_map)
   for iteration in xrange(num_iterations):
@@ -656,90 +645,115 @@ def phase(scratch_path):
 
     assert_state(A, K, C, M, MM, G)
 
-    C_samples.append(C)
-
-    ## save all samples from each iteration for now
-    #C_samples[sidx,:] = C
-    #sidx = (sidx + 1) % num_iterations
+    C_samples.append(np.array(C))
 
   assert_state(A, K, C, M, MM, G)
 
   print 'finished sampling'
-  print 'num samples', num_samples
 
   h5_path = os.path.join(scratch_path, 'phased.h5')
   h5f = h5py.File(h5_path, 'w')
-  h5f.create_dataset('H_samples', data=H_samples)
   h5f.create_dataset('C_samples', data=C_samples)
   h5f.close()
 
 def make_outputs(inbam_path, scratch_path):
   inputsh5_path = os.path.join(scratch_path, 'inputs.h5')
   phaseh5_path = os.path.join(scratch_path, 'phased.h5')
-  snps, bcodes, A = util.load_phase_inputs(inputsh5_path)
+  snps, full_bcodes, full_A, _ = util.load_phase_inputs(inputsh5_path)
   h5f = h5py.File(phaseh5_path, 'r')
-  H_samples = np.array(h5f['H_samples'])
+
   C_samples = np.array(h5f['C_samples'])
   h5f.close()
 
-  print 'loaded {} X {}'.format(len(bcodes), len(snps))
-  bcodes, A = util.subsample_reads(bcodes, A, lim=5000)
-  print '  - subsample to {} X {}'.format(len(bcodes), len(snps))
+  print 'loaded {} X {}'.format(len(full_bcodes), len(snps))
+  subs_bcodes, A, _ = util.subsample_reads(full_bcodes, full_A, full_bcodes, lim=5000)
+  print '  - subsample to {} X {}'.format(len(subs_bcodes), len(snps))
 
-  idx_rid_map = dict(list(enumerate(bcodes)))
+  idx_sub_rid_map = dict(list(enumerate(subs_bcodes)))
+  idx_full_rid_map = dict(list(enumerate(full_bcodes)))
   idx_snp_map = dict(list(enumerate(snps)))
   M_, N_ = A.shape
-  K = hp.K
 
-  # convert ref from -1 to 0 so can compute sampled probability
-  H_samples[H_samples == -1] = 0
+  # determine number of converged clusters
+  Ks = map(lambda(x): np.max(x), C_samples)
+  num_samples = len(Ks)
 
-  def get_empirical_probs():
-    eidx = num_iterations - 1
-    sidx = eidx - num_samples * sample_step
-    assert eidx < num_iterations and sidx > 0
-    p_H = np.sum(H_samples[sidx:eidx:sample_step,:,:],axis=0) / num_samples
-    p_C = np.zeros((M_,K))
-    for k in xrange(K):
-      p_C[:,k] = 1.* np.sum(C_samples[sidx:eidx:sample_step,:] == k,axis=0) / num_samples
+  K = Ks[-1]+1
+  i = num_samples - next((i for i, k in enumerate(Ks[::-1]) if k != K-1), None)
+  s_i = int((num_samples - i) * 0.1 + i)
+  if len(set(Ks[s_i:])) != 1:
+    print 'WARNING variable number of clusters'
+    print map(lambda(x):x+1,list(set(K_s[s_i:])))
 
-    # round probs to get haplotype matrix
-    K_, N_ = p_H.shape
-    H = np.zeros((K_, N_))
-    H[p_H >= 0.95] = 1
-    H[p_H < 0.05] = -1
-    return p_C, p_H, H
+  num_conv_samples = (num_samples - s_i)
+  print '{} total samples'.format(num_samples)
+  print '  - using {} samples post-mixing to determine haplotypes'.format(num_conv_samples)
 
-  def get_assignments(p_C):
+  def get_assignments(p_C, cutoff=0.8):
+    M = p_C.shape[0]
     # determine read assignment to haplotypes
-    W = np.empty((M_,))
+    W = np.empty((M,))
     W.fill(-1)
-    for i in xrange(M_):
+    for i in xrange(M):
       assn = np.argmax(p_C[i,:])
-      if p_C[i,assn] > 0.8:
+      if p_C[i,assn] >= cutoff:
         W[i] = assn
       else:
         pass
     return W
 
-  p_C, p_H, H = get_empirical_probs()
-  W = get_assignments(p_C)
+  # drop barcodes from clusters that did not stay fixed >90% of the time
+  # in the mixed distribution
+  Cs = np.vstack(C_samples[s_i:])
+  p_C = np.zeros((M_,K))
+  for k in xrange(K):
+    p_C[:,k] = 1.*np.sum(Cs == k, axis=0) / num_conv_samples
+  subs_W = get_assignments(p_C)
+  fixed_mask = (subs_W != -1)
 
-  outdir_path = os.path.join(scratch_path, 'bins')
-  util.mkdir_p(outdir_path)
+  _, M, MM, _, _ = score(A[fixed_mask,:],K, subs_W[fixed_mask])
 
-  def get_bcodes_from_rids(rids):
+  # FIXME assert/check each subsampled read ends up in same resting place...
+  
+  # score *all* reads against each converged haplotypes
+  M_, N_ = full_A.shape
+  p_C = np.zeros((M_, K))
+  for i, r in enumerate(full_A):
+    m, mm = get_ref_alt(r)
+    for k in xrange(K):
+      p_C[i,k] = score_read(m, mm, M[k,:], MM[k,:])
+    p_C[i,:] -= logsumexp(p_C[i,:])
+  full_W = get_assignments(p_C, np.log(0.99))
+
+  # dump stats on number of barcodes rescued after mapping back to
+  # converged haps
+  def get_bcodes_from_rids(rids, idx_rid_map):
     bcodes = set()
     for rid in np.nditer(rids):
       rid = int(rid)
       bcodes.add(idx_rid_map[rid])
     return bcodes
   
+  used_rids = np.nonzero(full_W != -1)[0]
+  used_bcodes = get_bcodes_from_rids(used_rids, idx_full_rid_map)
+  subs_bcodes = set(subs_bcodes)
+  full_bcodes = set(full_bcodes)
+
+  print '{} / {} of subsampled barcodes used'.format(
+    len(subs_bcodes & used_bcodes), len(subs_bcodes))
+  print '{} / {} of all barcodes used'.format(
+    len(full_bcodes & used_bcodes), len(full_bcodes))
+  print '  - {} barcodes rescued'.format(len(used_bcodes - subs_bcodes))
+
+  # create output bin *bam and *pickle files
+  outdir_path = os.path.join(scratch_path, 'bins')
+  util.mkdir_p(outdir_path)
+
   clusters_map = {}
   for k in xrange(K):
-    sel_rids = np.nonzero(W == k)[0]
+    sel_rids = np.nonzero(full_W == k)[0]
     if len(sel_rids) > 0:
-      bcode_set = get_bcodes_from_rids(sel_rids)
+      bcode_set = get_bcodes_from_rids(sel_rids, idx_full_rid_map)
     else:
       bcode_set = set()
     clusters_map[k] = bcode_set
@@ -752,12 +766,6 @@ def make_outputs(inbam_path, scratch_path):
 
   h5_path = os.path.join(scratch_path, 'bins', 'clusters.h5')
   h5f = h5py.File(h5_path, 'w')
-  h5f.create_dataset('H', data=H)
-  h5f.create_dataset('W', data=W)
+  h5f.create_dataset('W', data=full_W)
   h5f.close()
-
-  print 'total haplotype positions', K * N_
-  print '  - assigned', np.sum(np.abs(H))
-  print 'assigned barcodes', sum((W != -1))
-  print 'unassigned barcodes', sum((W == -1))
 
