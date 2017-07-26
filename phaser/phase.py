@@ -28,7 +28,7 @@ def phase_barcodes(
     util.make_inputs(bam_path, vcf_path, scratch_path, bcodes)
   if not os.path.isfile(phased_path):
     phase(scratch_path)
-  clusters_map = make_outputs(scratch_path)
+  clusters_map = make_outputs(bam_path, scratch_path)
   return clusters_map
 
 #=========================================================================

@@ -49,8 +49,10 @@ def score_assignment(K, C, labels_map):
     cnt = Counter(map(lambda(m):labels_map[m], members))
     acc = -1 if total == 0 else 1.* cnt.most_common()[0][1] / total
     accs.append(acc)
-    print 'cluster', k 
-    pp(cnt)
+    #print 'cluster', k 
+    #pp(cnt)
+    print 'c{}:{} '.format(k, total),
+  print
   return sorted(accs)
     
 #--------------------------------------------------------------------------
@@ -216,8 +218,8 @@ def merge_split(A, K, C, M, MM, G, S,
   # FIXME technically reads i and j should be fixed during the gibbs scan
   #print 'local gibbs scan'
   for local_iteration in xrange(3):
-    C_s, _ = gibbs_scan(A_s, 2, C_s, M_s, MM_s, G_s, S_s,
-      fixed_rids=fixed_rids)
+    _, _, C_s, _, _, _, _ = \
+      gibbs_scan(A_s, 2, C_s, M_s, MM_s, G_s, S_s, fixed_rids=fixed_rids)
   C_launch = np.array(C_s)
 
   # FIXME remove
@@ -241,8 +243,8 @@ def merge_split(A, K, C, M, MM, G, S,
   # split operation
   if C[i] == C[j]:
     # transition from launch to final split state
-    C_s, trans_logP = gibbs_scan(A_s, 2, C_s, M_s, MM_s, G_s, S_s,
-      fixed_rids=fixed_rids)
+    trans_logP, _, C_s, _, _, _, _ = \
+      gibbs_scan(A_s, 2, C_s, M_s, MM_s, G_s, S_s, fixed_rids=fixed_rids)
     logPs_split, _, _, _, _ = score(A_s, 2, C_s)
 
     n_ci = np.sum(C_s == 0)
@@ -358,7 +360,7 @@ def merge_split(A, K, C, M, MM, G, S,
     labels = set(map(lambda(r): true_labels_map[r], sel_rids))
     good_merge = (len(labels) == 1)
     # transition from launch to original split state
-    C_s, trans_logP = gibbs_scan(
+    trans_logP, _, C_s, _, _, _, _ = gibbs_scan(
       A_s, 2, C_launch, M_s, MM_s, G_s, S_s,
       trans_path=C_orig,
       fixed_rids=fixed_rids,
@@ -522,7 +524,7 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
       #print 'k_true ref alleles', M[k_true,mask]
       #print 'k_true alt alleles', MM[k_true,mask]
       #print
-      #dumpy += 1
+      #dumpy += 2
       #if dumpy > 20:
       #  die
       bcode = bcodes_map[i_p]
@@ -551,6 +553,20 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
       MM[k_n,:] = MM[k_n,:] + mm
       for j in np.nditer(np.nonzero(A[i_p,:] != 0)):
         G[k_n,j,:] = score_beta_site(M[k_n,j], MM[k_n,j])
+
+      if np.sum(C == k_p) == 0:
+        #print 'occupancy of cluster {} empty, removing during gibbs scan'.format(k_p)
+        m = np.ones(K)
+        m[k_p] = 0
+        m = np.ma.make_mask(m)
+        # drop old haplotype cluster 
+        M = M[m,:]
+        MM = MM[m,:]
+        G = G[m,:,:]
+        #S = S[m,:]
+        # shift index assignments down
+        C[C > k_p] -= 1
+        K -= 1
     else:
       C[i_p] = k_p
 
@@ -570,7 +586,7 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
   #    for j in np.argsort(np.minimum(MM[k,:], M[k,:]))[::-1][:20]:
   #      print 'snp {} M, MM = {}, {}'.format(snps_map[j], M[k,j], MM[k,j])
   #  die
-  return C, trans_logP
+  return trans_logP, K, C, M, MM, G, S
 
 #--------------------------------------------------------------------------
 # phasing
@@ -611,8 +627,6 @@ def phase(scratch_path):
         M_c = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == 1, j]))
         MM_c = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == -1, j]))
         assert M[k,j]  == M_c
-        assert M[k,j]  == M_c
-        assert M[k,j]  == M_c
         assert MM[k,j] == MM_c
         assert (G[k,j,:] == score_beta_site(M_c, MM_c)).all()
 
@@ -630,7 +644,7 @@ def phase(scratch_path):
     #print 'iteration', iteration
     if iteration % 50 == 0:
       print 'iteration', iteration
-      print '  - accuracies',
+      print '  - accuracies'
       print score_assignment(K, C, true_labels_map)
 
     assert_state(A, K, C, M, MM, G)
@@ -640,7 +654,7 @@ def phase(scratch_path):
       print 'took MH merge-split move'
       print score_assignment(K, C, true_labels_map)
 
-    C, _ = gibbs_scan(A, K, C, M, MM, G, S)
+    _, K, C, M, MM, G, S = gibbs_scan(A, K, C, M, MM, G, S)
       #l=true_labels_map,b=bcodes_map,s=snps_map,debug=True)
 
     assert_state(A, K, C, M, MM, G)
@@ -768,4 +782,6 @@ def make_outputs(inbam_path, scratch_path):
   h5f = h5py.File(h5_path, 'w')
   h5f.create_dataset('W', data=full_W)
   h5f.close()
+
+  return clusters_map
 

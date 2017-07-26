@@ -92,7 +92,7 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
   bam_fin = pysam.Samfile(bam_path, 'rb')
   snp_bcode_counts_map = defaultdict(lambda:defaultdict(Counter))
   seen_set = set()
-  bcode_label_map = {}
+  bcode_label_map = defaultdict(lambda:None)
   for (i, target_snp) in enumerate(sorted(var_map)):
     (ctg, pos) = target_snp
     if ctg in ['contig-100_6', 'contig-100_10']:
@@ -197,7 +197,10 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
       continue
     if cnt > 1:
       pass_bcodes.append(bcode)
-      true_labels.append(bcode_label_map[bcode])
+      if bcode_label_map[bcode]:
+        true_labels.append(bcode_label_map[bcode])
+      else:
+        true_labels.append(0)
   pass_bcodes_set = set(pass_bcodes)
 
   # create input matrix
