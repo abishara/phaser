@@ -95,9 +95,9 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
   bcode_label_map = defaultdict(lambda:None)
   for (i, target_snp) in enumerate(sorted(var_map)):
     (ctg, pos) = target_snp
-    if ctg in ['contig-100_6', 'contig-100_10']:
-      print 'skipping bad ctg', ctg
-      continue
+    #if ctg in ['contig-100_6', 'contig-100_10']:
+    #  print 'skipping bad ctg', ctg
+    #  continue
     if i % 500 == 0:
       print 'num snps', i
       #if i > 400:
@@ -186,8 +186,11 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
   for snp, bcode_counts_map in snp_bcode_counts_map.items():
     if snp not in pass_snps_set:
       continue
-    for bcode in bcode_counts_map:
-      bcode_snp_counts[bcode] += 1
+    for bcode, counts in bcode_counts_map.items():
+      ra, aa = var_map[snp]
+      rc, ac = counts[ra], counts[aa]
+      if not is_mix(rc, ac) and (rc > 0 or ac > 0):
+        bcode_snp_counts[bcode] += 1
 
   true_labels = []
   pass_bcodes = []
@@ -438,7 +441,7 @@ def get_normalized_genotypes(_A):
   A[A<0] = -1
   return A
 
-def subsample_reads(bcodes, A, true_labels, lim=5000):
+def subsample_reads(bcodes, A, true_labels, lim=15000):
   # subsample most informative barcodes
   A_z = np.sum((A == 0), axis=1)
   s_idx = np.argsort(A_z)
