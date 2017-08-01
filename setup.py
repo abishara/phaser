@@ -11,10 +11,9 @@ setup(
     'scipy>=0.18',
     'numpy>=1.11.0',
     'pysam>=0.9',
+    'h5py',
     'PyVCF',
     'pandas',
-    'h5py',
-
   ],
   author='alex bishara',
   description='barcode phaser',
