@@ -377,6 +377,7 @@ def make_bin_outputs(
         fout.write('{}\n'.format(bcode))
 
   # dump output bams
+  #return
   inbam = pysam.Samfile(inbam_path, 'rb')
 
   unassn_path = os.path.join(outdir_path, 'unassigned.bam')

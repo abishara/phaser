@@ -598,7 +598,7 @@ def phase(scratch_path):
   snps, bcodes, A, true_labels = util.load_phase_inputs(h5_path)
 
   print 'loaded {} X {}'.format(len(bcodes), len(snps))
-  bcodes, A, true_labels = util.subsample_reads(bcodes, A, true_labels, lim=15000)
+  bcodes, A, true_labels = util.subsample_reads(bcodes, A, true_labels, lim=5000)
   print '  - subsample to {} X {}'.format(len(bcodes), len(snps))
 
   # FIXME change to assert
@@ -680,7 +680,7 @@ def make_outputs(inbam_path, scratch_path):
   h5f.close()
 
   print 'loaded {} X {}'.format(len(full_bcodes), len(snps))
-  subs_bcodes, A, _ = util.subsample_reads(full_bcodes, full_A, full_bcodes, lim=15000)
+  subs_bcodes, A, _ = util.subsample_reads(full_bcodes, full_A, full_bcodes, lim=5000)
   print '  - subsample to {} X {}'.format(len(subs_bcodes), len(snps))
 
   idx_sub_rid_map = dict(list(enumerate(subs_bcodes)))
@@ -737,7 +737,7 @@ def make_outputs(inbam_path, scratch_path):
     for k in xrange(K):
       p_C[i,k] = score_read(m, mm, M[k,:], MM[k,:])
     p_C[i,:] -= logsumexp(p_C[i,:])
-  full_W = get_assignments(p_C, np.log(0.99))
+  full_W = get_assignments(p_C, np.log(0.90))
 
   # dump stats on number of barcodes rescued after mapping back to
   # converged haps
