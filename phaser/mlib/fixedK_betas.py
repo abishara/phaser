@@ -12,8 +12,11 @@ import pysam
 import util
 import hyper_params as hp
 
-np.random.seed(0)
-random.seed(0)
+seed = 0
+seed = random.randrange(2**32 - 1)
+print 'seed', seed
+np.random.seed(seed)
+random.seed(seed)
 
 (alpha, beta) = (1.0, 1.0)
 (alpha, beta) = (0.1, 0.1)
@@ -139,6 +142,7 @@ def merge_split(A, K, C, M, MM, G, S,
   j = (i-1)%(N_-1) if i == j else j
   if j < i:
     i,j = j,i
+  assert i != j
 
   s_m = (C == C[i]) | (C == C[j])
   sel_rids = np.nonzero(s_m)[0]
@@ -249,7 +253,7 @@ def merge_split(A, K, C, M, MM, G, S,
 
     n_ci = np.sum(C_s == 0)
     n_cj = np.sum(C_s == 1)
-    #assert min(n_ci, n_cj) > 0
+    assert min(n_ci, n_cj) > 0, "split configuration the same as original"
 
     acc_log_prior = (
       np.log(DP_alpha) + 
@@ -478,16 +482,22 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
   
     # set assignment to nil for now to resample hap
     C[i_p] = -1
+
+    singleton_p = (np.sum(C == k_p) == 0)
   
+    # score read if it were to move to its own cluster if not a singleton
+    # already
+    # NOTE can only create a new cluster in a restricted gibbs scan where
+    # the reads are fixed
+    K_s = K + 1 if not singleton_p and fixed_rids == None else K
     # score read under all haps
-    # FIXME add possiblity for read to open a new cluster
-    scores = np.ones(K)
-    for k in xrange(K):
+    scores = np.ones(K_s)
+    for k in xrange(K_s):
       n_k = np.sum(C == k)
       if n_k == 0:
         n = np.sum(m) + np.sum(mm)
         scores[k] = np.log(DP_alpha) + n*(np.log(alpha) - np.log(alpha+beta))
-        n_k = DP_alpha
+        #n_k = DP_alpha
       elif k == k_p:
         scores[k] = np.log(n_k) + score_read(m, mm, M_p, MM_p)
       else:
@@ -542,7 +552,36 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
       #die 
    
     # update haplotypes with new assignment 
-    if k_n != k_p: 
+    # move to new singleton clsuter
+    if k_n == K:
+      print 'create new cluster {} during gibbs scan'.format(k_n)
+      # update previous haplotype to remove r_i 
+      M[k_p,:] = M_p 
+      MM[k_p,:] = MM_p 
+      G[k_p,:,:] = G_p 
+      C[i_p] = k_n 
+
+      M = np.vstack([M, np.zeros(N_)])
+      MM = np.vstack([MM, np.zeros(N_)])
+      G_p = G
+      G = np.zeros((K+1,N_,3))
+      G[:K,:,:] = G_p
+      S = np.vstack([S, np.zeros(1)])
+
+      _, M_n, MM_n, G_n, S_n = score(
+        A[i_p,:].reshape(1, N_),
+        1, 
+        np.array([0,]),
+      )
+
+      M[K,:] = M_n[0,:]
+      MM[K,:] = MM_n[0,:]
+      G[K,:,:] = G_n[0,:,:]
+      S[K,:] = S_n[0,:]
+      K += 1
+
+    # move to new existing cluster
+    elif k_n != k_p: 
       # update previous haplotype to remove r_i 
       M[k_p,:] = M_p 
       MM[k_p,:] = MM_p 
@@ -555,7 +594,7 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
         G[k_n,j,:] = score_beta_site(M[k_n,j], MM[k_n,j])
 
       if np.sum(C == k_p) == 0:
-        #print 'occupancy of cluster {} empty, removing during gibbs scan'.format(k_p)
+        print 'occupancy of cluster {} empty, removing during gibbs scan'.format(k_p)
         m = np.ones(K)
         m[k_p] = 0
         m = np.ma.make_mask(m)
@@ -563,10 +602,11 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
         M = M[m,:]
         MM = MM[m,:]
         G = G[m,:,:]
-        #S = S[m,:]
+        S = S[m,:]
         # shift index assignments down
         C[C > k_p] -= 1
         K -= 1
+    # keep the same
     else:
       C[i_p] = k_p
 

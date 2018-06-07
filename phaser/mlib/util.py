@@ -352,6 +352,61 @@ def make_inputs_toy(d1, d2, scratch_path):
   h5f.create_dataset('true_labels', data=true_labels)
   h5f.close()
 
+def make_inputs_toy2(d1, d2, scratch_path):
+  # toy example
+  pass_snps = [
+    ('snp0',0),
+    ('snp1',0),
+    ('snp2',0),
+    ('snp3',0),
+    ('snp4',0),
+  ]
+  pass_bcodes = [
+    'bcode0',
+    'bcode1',
+    'bcode2',
+    'bcode3',
+    'bcode4',
+    'bcode5',
+    'bcode6',
+    'bcode7',
+    'bcode8',
+    'bcode9',
+  ]
+  A = np.array([
+  [-1,1,1,1,1],
+  [-1,1,1,1,1],
+  [-1,1,1,1,1],
+  [-1,1,1,1,1],
+  [-1,1,1,1,1],
+
+  [1,-1,1,1,1],
+  [1,-1,1,1,1],
+  [1,-1,1,1,1],
+  [1,-1,1,1,1],
+  [1,-1,1,1,1],
+  ])
+  true_labels = [
+    'c0',
+    'c0',
+    'c0',
+    'c0',
+    'c0',
+    'c1',
+    'c1',
+    'c1',
+    'c1',
+    'c1',
+  ]
+
+  h5_path = os.path.join(scratch_path, 'inputs.h5')
+  h5f = h5py.File(h5_path, 'w')
+  h5f.create_dataset('snps', data=pass_snps)
+  h5f.create_dataset('bcodes', data=pass_bcodes)
+  h5f.create_dataset('genotypes', data=A)
+  h5f.create_dataset('true_labels', data=true_labels)
+  h5f.close()
+
 #--------------------------------------------------------------------------
 # phasing utilities
 #--------------------------------------------------------------------------
@@ -397,8 +452,13 @@ def make_bin_outputs(
 
 def get_initial_state(A):
   M_, N_ = A.shape
+  # initialize in a single cluster
   K = 1
   C = np.zeros(M_, dtype=np.int)
+
+  ## initialize with every read in its own cluster
+  #K = M_
+  #C = np.arange(M_, dtype=np.int)
   return K, C
 
 def get_initial_state_fixedK(A, K):
