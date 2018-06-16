@@ -14,12 +14,14 @@ import hyper_params as hp
 
 seed = 0
 seed = random.randrange(2**32 - 1)
+seed = 2652018667
 print 'seed', seed
 np.random.seed(seed)
 random.seed(seed)
 
 (alpha, beta) = (1.0, 1.0)
 (alpha, beta) = (0.1, 0.1)
+(alpha, beta) = (0.05, 0.05)
 DP_alpha = 1
 
 num_iterations = 400
@@ -83,7 +85,7 @@ def score_beta_site(m, mm):
     beta_cache[(m, mm)] = (a, b, n)
   return a, b, n
 
-def score(A, K, C):
+def score(A, K, C, debug=False):
   M_, N_ = A.shape
   logP = 0.0
   # match+mismatch counts for each site in each hap K
@@ -102,6 +104,9 @@ def score(A, K, C):
       M[k,j]  = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == 1, j]))
       MM[k,j] = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == -1, j]))
       G[k,j,:] = score_beta_site(M[k,j], MM[k,j])
+      a,b,n = score_beta_site(M[k,j], MM[k,j])
+      if debug:
+        print 'k,j,score', k,j,M[k,j],MM[k,j], a+b-n
     S[k] = (
       N_ * beta_R + 
       np.sum(G[k,:,0]) + 
@@ -127,6 +132,21 @@ def score_read(m, mm, M, MM):
 
   return logP
 
+# make sure intermediate tables are all consistent
+def assert_state(A, K, C, M, MM, G):
+  M_, N_ = A.shape
+  for k in xrange(K):
+    C_i = (C == k)
+    assert np.sum(C_i) > 0
+    A_k = A[C_i,:]
+    for j in xrange(N_):
+      M_c = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == 1, j]))
+      MM_c = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == -1, j]))
+      assert M[k,j]  == M_c
+      assert MM[k,j] == MM_c
+      assert (G[k,j,:] == score_beta_site(M_c, MM_c)).all()
+
+
 #--------------------------------------------------------------------------
 # merge-split MH move
 #--------------------------------------------------------------------------
@@ -144,10 +164,15 @@ def merge_split(A, K, C, M, MM, G, S,
     i,j = j,i
   assert i != j
 
+  #tmp_rids = np.nonzero(C == 0)[0]
+  #i = random.choice(filter(lambda(rid): true_labels_map[rid] == 'NOTCH2NL-D.diploid', tmp_rids))
+  #j = random.choice(filter(lambda(rid): true_labels_map[rid] == 'NOTCH2NL-D', tmp_rids))
+  #print 'i,j', i,j
+  #print 'r_i label', true_labels_map[i]
+  #print 'r_j label', true_labels_map[j]
+
   s_m = (C == C[i]) | (C == C[j])
   sel_rids = np.nonzero(s_m)[0]
-
-  #print 'i,j', i,j
 
   r_i = A[i,:]
   r_j = A[j,:]
@@ -172,44 +197,11 @@ def merge_split(A, K, C, M, MM, G, S,
   C_orig[m0] = 0
   C_orig[m1] = 1
   
-  # place each read to the closer of read i or read j
-  C_s = np.zeros(num_s, dtype=np.int)
-
-  ri_label = true_labels_map[i]
-  rj_label = true_labels_map[j]
-  bad_assn = 0
-  good_assn = 0
-  for rid, k_s in zip(sel_rids, range(num_s)):
-    label = true_labels_map[rid]
-    r_k = A_s[k_s]
-    m_i, mm_i = map(np.sum, get_matches(r_i, r_k))
-    m_j, mm_j = map(np.sum, get_matches(r_j, r_k))
-    assn = 0 if m_i - mm_i > m_j - mm_j else 1
-    C_s[k_s] = assn
-    if label in [ri_label, rj_label] and not (
-      (label == ri_label and assn == 0) or
-      (label == rj_label and assn == 1)
-    ):
-      #if (label == ri_label) and mm_i > 0:
-      #  print 'wtf'
-      #  print 'mismatched label'
-      #  print '  - assn', assn, label
-      #  print '  - (m_i, mm_i)', m_i, mm_i
-      #  print '  - (m_j, mm_j)', m_j, mm_j
-      #  print 'bcode', bcodes_map[rid]
-      #  die
-      bad_assn += 1
-    elif label in [ri_label, rj_label]:
-      good_assn += 1
-  #print 'c_i:{} r_i label:{}'.format(c_i, ri_label)
-  #print 'c_j:{} r_j label:{}'.format(c_j, rj_label)
-  #print '  r_i/j match/mismatch ', map(np.sum, get_matches(r_i, r_j))
-  #print '  pre local gibbs good/bad assn ', good_assn, bad_assn
-
-  legit_split = (ri_label != rj_label)
-     
+  # initial random assignment between two split clusters
+  C_s = np.random.randint(2, size=num_s, dtype=np.int)
   C_s[i_s] = 0
   C_s[j_s] = 1
+
   fixed_rids = set([i_s[0], j_s[0]])
 
   # merge score
@@ -219,36 +211,64 @@ def merge_split(A, K, C, M, MM, G, S,
   # intermediate restricted gibbs scan to get sensible split
   _, M_s, MM_s, G_s, S_s = score(A_s, 2, C_s)
 
-  # FIXME technically reads i and j should be fixed during the gibbs scan
-  #print 'local gibbs scan'
-  for local_iteration in xrange(8):
-    _, _, C_s, _, _, _, _ = \
-      gibbs_scan(A_s, 2, C_s, M_s, MM_s, G_s, S_s, fixed_rids=fixed_rids)
-  C_launch = np.array(C_s)
-
   # FIXME remove
   #-----------------------------------------------------------------------
-  bad_assn = 0
-  good_assn = 0
-  for rid, k_s in zip(sel_rids, range(num_s)):
-    label = true_labels_map[rid]
-    assn = C_launch[k_s]
-    if label in [ri_label, rj_label] and not (
-      (label == ri_label and assn == 0) or
-      (label == rj_label and assn == 1)
-    ):
-      bad_assn += 1
-    elif label in [ri_label, rj_label]:
-      good_assn += 1
-  #print '  post local gibbs good/bad assn ', good_assn, bad_assn
+  def get_labels(C):
+    cnt0 = Counter()
+    cnt1 = Counter()
+    for rid, k_s in zip(sel_rids, range(num_s)):
+      label = true_labels_map[rid]
+      assn = C[k_s]
+      cnt = cnt0 if assn == 0 else cnt1
+      cnt[label] += 1
+    print '  - new c0 counts', cnt0.most_common()
+    print '  - new c1 counts', cnt1.most_common()
   #-----------------------------------------------------------------------
+
+  labels_remap = {}
+  for nrid, rid in enumerate(sel_rids):
+    labels_remap[nrid] = true_labels_map[rid]
+
+  #print 'pre local gibbs'
+  #get_labels(C_s)
+  for local_iteration in xrange(8):
+    tlogP, _, C_s, M_s, MM_s, G_s, S_s = \
+      gibbs_scan(A_s, 2, C_s, M_s, MM_s, G_s, S_s, fixed_rids=fixed_rids,
+        debug=True,
+        #l=labels_remap,
+      )
+  C_launch = np.array(C_s)
+
+  #print 'post local gibbs'
+  #get_labels(C_launch)
+
+  def get_mixed(M, MM):
+    mask = (M > 0) & (MM > 0)
+    values = []
+    for x,y in zip(M[mask], MM[mask]):
+      if x > y:
+        x,y = y,x
+      if x > 2:
+        values.append((x,y))
+    print sorted(values)
+    print 'num mismatch', len(values)
+    print 'num all mismatch', np.sum(mask)
+
+  #print 'split_mm_0'
+  #get_mixed(M_s[0,:], MM_s[0,:])
+  #print 'split_mm_1'
+  #get_mixed(M_s[1,:], MM_s[1,:])
+  #print 'merge_mm  '
+  #get_mixed(t_M[0,:], t_MM[0,:])
+  #print 'num zero', np.sum((t_M[0,:] == 0) & (t_MM[0,:] == 0))
 
   taken = False
   # split operation
   if C[i] == C[j]:
     # transition from launch to final split state
-    trans_logP, _, C_s, _, _, _, _ = \
-      gibbs_scan(A_s, 2, C_s, M_s, MM_s, G_s, S_s, fixed_rids=fixed_rids)
+    #trans_logP, _, C_s, _, _, _, _ = \
+    trans_logP, _, C_s, M_s, MM_s, G_s, S_s = \
+      gibbs_scan(A_s, 2, C_launch, M_s, MM_s, G_s, S_s, fixed_rids=fixed_rids)
     logPs_split, _, _, _, _ = score(A_s, 2, C_s)
 
     n_ci = np.sum(C_s == 0)
@@ -264,6 +284,14 @@ def merge_split(A, K, C, M, MM, G, S,
     acc_log_trans = -trans_logP
 
     acc = min(1, np.exp(acc_log_prior + acc_log_ll + acc_log_trans))
+
+    #print 'logPs_split  ', logPs_split
+    #print 'logPs_merge  ', logPs_merge
+    #print 'acc_log_prior', acc_log_prior
+    #print 'acc_log_ll   ', acc_log_ll
+    #print 'acc_log_trans', acc_log_trans
+    #print 'acc', acc
+    #die
     if random.random() <= acc and min(n_ci, n_cj) > 0:
       taken = True
       print 'splitting cluster', C[i]
@@ -297,66 +325,9 @@ def merge_split(A, K, C, M, MM, G, S,
       print 'split taken!', acc
       print 'splitting cluster', C[i]
       print '  - (old, new) = {}, {}'.format(np.sum(m0), np.sum(m1))
-      #labels = Counter(map(lambda(r): true_labels_map[r], sel_rids))
-      #bad_split = (len(labels) == 1) or labels.most_common()[1][1] < 10
-
-      ##if min(n_ci, n_cj) == 1:
-      ##  print 'wtf bad split'
-      ##  print 
-      ##  die
-      #if bad_split and acc  == 1:
-      #  print 'split a pure cluster!!'
-      #  print 'acc_log', acc_log_prior + acc_log_ll + acc_log_trans
-      #  print 'acc', np.exp(acc_log_prior + acc_log_ll + acc_log_trans)
-      #  print
-      #  print 'acc_log_prior', acc_log_prior
-      #  print 'acc_log_ll   ', acc_log_ll
-      #  print 'logPs_split  ', logPs_split 
-      #  print 'logPs_merge  ', logPs_merge
-      #  print 'acc_log_trans', acc_log_trans
-      #  print 
-
-      #  print 'top 20 mismatch positions'
-      #  for j in np.argsort(np.minimum(t_MM[0,:], t_M[0,:]))[::-1][:20]:
-      #    print 'snp', snps_map[j]
-      #    print '   - M, MM', t_M[0,j], t_MM[0,j]
-      #  die
 
     else:
       pass 
-      #print 'not splitting'
-      #cnt = Counter(map(lambda(r): true_labels_map[r], sel_rids))
-      #mix_cluster = len(cnt) == 2 and cnt.most_common()[1][0] > 100
-      #c0_labels = []
-      #c1_labels = []
-      #if legit_split and mix_cluster:
-      #  for rid, k_s in zip(sel_rids, range(num_s)):
-      #    label = true_labels_map[rid]
-      #    if C_s[k_s] == 0:
-      #      c0_labels.append(label)
-      #    else:
-      #      c1_labels.append(label)
-      #  print 'missed chance to split mixed cluster!', c_i
-      #  print '  - proposed split'
-      #  print '    - c0', Counter(c0_labels).most_common()
-      #  print '    - c1', Counter(c1_labels).most_common()
-      #  print 'acc_log', acc_log_prior + acc_log_ll + acc_log_trans
-      #  print 'acc', np.exp(acc_log_prior + acc_log_ll + acc_log_trans)
-      #  print
-      #  print 'acc_log_prior', acc_log_prior
-      #  print 'acc_log_ll   ', acc_log_ll
-      #  print 'logPs_split  ', logPs_split 
-      #  print 'logPs_merge  ', logPs_merge
-      #  print 'acc_log_trans', acc_log_trans
-      #  print 
-      #  print 'merge sum M', np.sum(t_M[0,:])
-      #  print 'merge sum MM', np.sum(t_MM[0,:])
-      #  print
-      #  print 'split c0 sum M', np.sum(M_s[0,:])
-      #  print 'split c0 sum MM', np.sum(MM_s[0,:])
-      #  print 'split c1 sum M', np.sum(M_s[1,:])
-      #  print 'split c1 sum MM', np.sum(MM_s[1,:])
-      #  die
 
   # merge operation
   else:
@@ -380,6 +351,7 @@ def merge_split(A, K, C, M, MM, G, S,
     )
     acc_log_ll = np.sum(logPs_merge) - np.sum(logPs_split)
     acc_log_trans = trans_logP
+
 
     acc = min(1, np.exp(acc_log_prior + acc_log_ll + acc_log_trans))
 
@@ -519,42 +491,10 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
       k_n = np.nonzero(assn == 1)[0][0]
     trans_logP += log_scores[k_n]
 
-    if debug and k_n != k_true and K == 5:
-      m,mm = get_ref_alt(r_i)
-      mask = (m > 0) | (mm > 0)
-      #print 'did not move to better cluster'
-      #print '  k_p, k_n, k_true', k_p, k_n, k_true
-      #print 'scores', scores
-      #print 'rlabel', rlabel
-      #print 'label clusters', cnt_map[rlabel]
-      #print 'mismatch ref allele'
-      #print 'r_i', r_i[mask]
-      #print 'k_n ref alleles', M[k_n,mask]
-      #print 'k_n alt alleles', MM[k_n,mask]
-      #print 'k_true ref alleles', M[k_true,mask]
-      #print 'k_true alt alleles', MM[k_true,mask]
-      #print
-      #dumpy += 2
-      #if dumpy > 20:
-      #  die
-      bcode = bcodes_map[i_p]
-      label_bcodes_map[rlabel].add(bcode)
-      debug_bcodes.add(bcode)
-
-      Mref_mask = (M[k_true,:] > MM[k_true,:]) & (np.minimum(M[k_true,:],MM[k_true,:]) == 0)
-      Malt_mask = (MM[k_true,:] > M[k_true,:]) & (np.minimum(M[k_true,:],MM[k_true,:]) == 0)
-      for j in np.nonzero(mm[Mref_mask])[0]:
-        snp = snps_map[j] 
-        snp_counter[snp] += 1 
-      for j in np.nonzero(m[Malt_mask])[0]:
-        snp = snps_map[j] 
-        snp_counter[snp] += 1 
-      #die 
    
     # update haplotypes with new assignment 
     # move to new singleton clsuter
     if k_n == K:
-      print 'create new cluster {} during gibbs scan'.format(k_n)
       # update previous haplotype to remove r_i 
       M[k_p,:] = M_p 
       MM[k_p,:] = MM_p 
@@ -610,28 +550,12 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
     else:
       C[i_p] = k_p
 
-  #if debug:
-  #  for label, lbcodes in label_bcodes_map.items():
-  #    print 'label', label
-  #    for bcode in (lbcodes & debug_bcodes):
-  #      print bcode
-  #  print 'debug bcodes', len(debug_bcodes)
-  #  print 'debug snps', len(snp_counter)
-  #  for snp, cnt in snp_counter.most_common():
-  #    print 'snp:{}, cnt:{}'.format(snp, cnt)
-
-  #  print 'cluster purities'
-  #  for k in xrange(K):
-  #    print 'cluster {} top 20 mismatches'.format(k)
-  #    for j in np.argsort(np.minimum(MM[k,:], M[k,:]))[::-1][:20]:
-  #      print 'snp {} M, MM = {}, {}'.format(snps_map[j], M[k,j], MM[k,j])
-  #  die
   return trans_logP, K, C, M, MM, G, S
 
 #--------------------------------------------------------------------------
 # phasing
 #--------------------------------------------------------------------------
-def phase(scratch_path):
+def phase(scratch_path, resume=False):
   global G_seed
 
   h5_path = os.path.join(scratch_path, 'inputs.h5')
@@ -650,25 +574,19 @@ def phase(scratch_path):
 
   M_, N_ = A.shape
 
-  # hidden haplotypes
-  K, C = util.get_initial_state(A)
+  if resume:
+    phaseh5_path = os.path.join(scratch_path, 'phased.h5')
+    assert os.path.isfile(phaseh5_path)
+    h5f = h5py.File(phaseh5_path, 'r')
+    C_samples = np.array(h5f['C_samples'])
+    C = C_samples[-1]
+    h5f.close()
+    K = max(C)+1
+  else:
+    K, C = util.get_initial_state(A, true_labels_map)
 
   # initialize and save intermediate values for fast vectorized computation
   logP, M, MM, G, S = score(A, K, C)
-
-  # make sure intermediate tables are all consistent
-  def assert_state(A, K, C, M, MM, G):
-    fail = False
-    for k in xrange(K):
-      C_i = (C == k)
-      assert np.sum(C_i) > 0
-      A_k = A[C_i,:]
-      for j in xrange(N_):
-        M_c = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == 1, j]))
-        MM_c = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == -1, j]))
-        assert M[k,j]  == M_c
-        assert MM[k,j] == MM_c
-        assert (G[k,j,:] == score_beta_site(M_c, MM_c)).all()
 
   # compute seed gammas for empty haplotype cluster
   G_seed = np.zeros((N_, 3))
@@ -693,9 +611,11 @@ def phase(scratch_path):
     if taken:
       print 'took MH merge-split move'
       print score_assignment(K, C, true_labels_map)
+      #die
 
+    # FIXME uncomment
     _, K, C, M, MM, G, S = gibbs_scan(A, K, C, M, MM, G, S)
-      #l=true_labels_map,b=bcodes_map,s=snps_map,debug=True)
+     #l=true_labels_map,b=bcodes_map,s=snps_map,debug=True)
 
     assert_state(A, K, C, M, MM, G)
 
@@ -704,11 +624,13 @@ def phase(scratch_path):
   assert_state(A, K, C, M, MM, G)
 
   print 'finished sampling'
+  print score_assignment(K, C, true_labels_map)
 
-  h5_path = os.path.join(scratch_path, 'phased.h5')
-  h5f = h5py.File(h5_path, 'w')
-  h5f.create_dataset('C_samples', data=C_samples)
-  h5f.close()
+  if not resume:
+    h5_path = os.path.join(scratch_path, 'phased.h5')
+    h5f = h5py.File(h5_path, 'w')
+    h5f.create_dataset('C_samples', data=C_samples)
+    h5f.close()
 
 def make_outputs(inbam_path, scratch_path):
   inputsh5_path = os.path.join(scratch_path, 'inputs.h5')
@@ -733,11 +655,11 @@ def make_outputs(inbam_path, scratch_path):
   num_samples = len(Ks)
 
   K = Ks[-1]+1
-  i = num_samples - next((i for i, k in enumerate(Ks[::-1]) if k != K-1), None)
+  i = num_samples - next((i for i, k in enumerate(Ks[::-1]) if k != K-1), num_samples)
   s_i = int((num_samples - i) * 0.1 + i)
   if len(set(Ks[s_i:])) != 1:
     print 'WARNING variable number of clusters'
-    print map(lambda(x):x+1,list(set(K_s[s_i:])))
+    print map(lambda(x):x+1,list(set(Ks[s_i:])))
 
   num_conv_samples = (num_samples - s_i)
   print '{} total samples'.format(num_samples)

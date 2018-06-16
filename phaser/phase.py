@@ -54,6 +54,7 @@ def main():
     'mkinputs',
     'phase',
     'mkoutputs',
+    'resume',
   ]
 
   util.mkdir_p(scratch_path)
@@ -64,6 +65,8 @@ def main():
     util.make_inputs(bam_path, vcf_path, scratch_path)
   elif cmd == 'phase':
     phase(scratch_path)
+  elif cmd == 'resume':
+    phase(scratch_path, resume=True)
   elif cmd == 'mkoutputs':
     make_outputs(bam_path, scratch_path)
   else:

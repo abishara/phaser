@@ -450,11 +450,20 @@ def make_bin_outputs(
   for fout in bam_fouts.values():
     fout.close()
 
-def get_initial_state(A):
+def get_initial_state(A, true_labels_map=None):
   M_, N_ = A.shape
   # initialize in a single cluster
   K = 1
   C = np.zeros(M_, dtype=np.int)
+
+  #if true_labels_map:
+  #  label_cid_map = dict(map(
+  #    lambda(cid, l): (l, cid),
+  #    enumerate(set(true_labels_map.values())),
+  #  ))
+  #  K = len(label_cid_map)
+  #  for rid, label in sorted(true_labels_map.items()):
+  #    C[rid] = label_cid_map[label]
 
   ## initialize with every read in its own cluster
   #K = M_
