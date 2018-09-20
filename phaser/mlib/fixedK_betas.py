@@ -24,17 +24,9 @@ random.seed(seed)
 (alpha, beta) = (0.05, 0.05)
 DP_alpha = 1
 
+alpha_v, beta_v = None, None
+
 num_iterations = 400
-
-# normalization constant for the beta
-beta_R = (
-  gammaln(alpha + beta)
-  - gammaln(alpha) +
-  - gammaln(beta)
-)
-
-# compute seed gammas for empty haplotype cluster
-G_seed = None
 
 #--------------------------------------------------------------------------
 # temporary stuff to score simulation moves
@@ -75,15 +67,16 @@ def get_matches(r1, r2):
   return (m, mm)
 
 beta_cache = {}
-def score_beta_site(m, mm):
+def score_beta_site(m, mm, alpha, beta):
   if m.shape == () and (m, mm) in beta_cache:
     return beta_cache[(m, mm)]
   a = gammaln(m + alpha)
   b = gammaln(mm + beta)
   n = gammaln(m + mm + alpha + beta)
+  reg = gammaln(alpha + beta) - gammaln(alpha) - gammaln(beta)
   if m.shape == ():
-    beta_cache[(m, mm)] = (a, b, n)
-  return a, b, n
+    beta_cache[(m, mm)] = (a, b, n, reg)
+  return a, b, n, reg
 
 def score(A, K, C, debug=False):
   M_, N_ = A.shape
@@ -92,7 +85,7 @@ def score(A, K, C, debug=False):
   M  = np.zeros((K, N_))
   MM = np.zeros((K, N_))
   # gamma counts
-  G = np.zeros((K, N_, 3))
+  G = np.zeros((K, N_, 4))
   # cluster scores with current assignment
   S = np.zeros((K, 1))
 
@@ -103,16 +96,19 @@ def score(A, K, C, debug=False):
     for j in xrange(N_):
       M[k,j]  = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == 1, j]))
       MM[k,j] = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == -1, j]))
-      G[k,j,:] = score_beta_site(M[k,j], MM[k,j])
-      a,b,n = score_beta_site(M[k,j], MM[k,j])
-      if debug:
-        print 'k,j,score', k,j,M[k,j],MM[k,j], a+b-n
+      G[k,j,:] = score_beta_site(
+        M[k,j], 
+        MM[k,j], 
+        alpha_v[j],
+        beta_v[j],
+      )
     S[k] = (
-      N_ * beta_R + 
+      np.sum(G[k,:,3]) + 
       np.sum(G[k,:,0]) + 
       np.sum(G[k,:,1]) -
       np.sum(G[k,:,2])
     )
+    assert S[k] <= 0 or ((M[k,:] == 0).all() and MM[k,:] == 0).all()
   logP = np.sum(S)
 
   return logP, M, MM, G, S
@@ -124,12 +120,20 @@ def score_read(m, mm, M, MM):
   mask1 = (mm > 0)
   N = M + MM
   # match component
-  mlogP = np.sum((np.log(alpha + M[mask0]) - np.log(alpha + beta + N[mask0])) * m[mask0])
+  mlogP = np.sum(
+    (
+      np.log(alpha_v[mask0] + M[mask0]) - 
+      np.log(alpha_v[mask0] + beta_v[mask0] + N[mask0])
+    ) * m[mask0]
+  )
   # mismatch component
-  mmlogP = np.sum((np.log(beta + MM[mask1]) - np.log(alpha + beta + N[mask1])) * mm[mask1])
-
+  mmlogP = np.sum(
+    (
+      np.log(beta_v[mask1] + MM[mask1]) - 
+      np.log(alpha_v[mask1] + beta_v[mask1] + N[mask1])
+    ) * mm[mask1]
+  )
   logP = mlogP + mmlogP
-
   return logP
 
 # make sure intermediate tables are all consistent
@@ -142,9 +146,10 @@ def assert_state(A, K, C, M, MM, G):
     for j in xrange(N_):
       M_c = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == 1, j]))
       MM_c = np.sum(np.abs(A_k[np.sign(A_k[:,j]) == -1, j]))
+      alpha, beta = alpha_v[j], beta_v[j]
       assert M[k,j]  == M_c
       assert MM[k,j] == MM_c
-      assert (G[k,j,:] == score_beta_site(M_c, MM_c)).all()
+      assert (G[k,j,:] == score_beta_site(M_c, MM_c, alpha, beta)).all()
 
 
 #--------------------------------------------------------------------------
@@ -152,17 +157,22 @@ def assert_state(A, K, C, M, MM, G):
 #--------------------------------------------------------------------------
 #@profile
 def merge_split(A, K, C, M, MM, G, S, 
-  true_labels_map, bcodes_map, snps_map):
+  true_labels_map, bcodes_map, snps_map, split_idx=None):
 
   M_, N_ = A.shape
 
-  # draw to reads
-  i = random.randint(0,M_-1)
-  j = random.randint(0,M_-1)
-  j = (i-1)%(N_-1) if i == j else j
-  if j < i:
-    i,j = j,i
-  assert i != j
+  # draw two reads from this cluster only to check for a split move
+  if split_idx != None:
+    tmp_rids = np.nonzero(C == split_idx)[0]
+    i, j = random.sample(tmp_rids, 2)
+  # draw two reads
+  else:
+    i = random.randint(0,M_-1)
+    j = random.randint(0,M_-1)
+    j = (i-1)%(N_-1) if i == j else j
+    if j < i:
+      i,j = j,i
+    assert i != j
 
   #tmp_rids = np.nonzero(C == 0)[0]
   #i = random.choice(filter(lambda(rid): true_labels_map[rid] == 'NOTCH2NL-D.diploid', tmp_rids))
@@ -242,6 +252,11 @@ def merge_split(A, K, C, M, MM, G, S,
   #print 'post local gibbs'
   #get_labels(C_launch)
 
+  ## FIXME remove
+  #for nrid, (rid, assn) in enumerate(zip(sel_rids, C_launch)):
+  #  if assn == 0:
+  #    print 'c0 launch bcode', bcodes_map[rid]
+
   def get_mixed(M, MM):
     mask = (M > 0) & (MM > 0)
     values = []
@@ -254,6 +269,14 @@ def merge_split(A, K, C, M, MM, G, S,
     print 'num mismatch', len(values)
     print 'num all mismatch', np.sum(mask)
 
+
+  #mask = (t_M[0,:] > 4) & (t_MM[0,:] > 4)
+  ##N = t_M[0,:] + t_MM[0,:]
+  ##print sorted(N[N>0])
+  #print 'num mismatch sites', np.sum(mask)
+  #print 'num nonzero sites', \
+  #  np.sum((t_M[0,:] > 0) | (t_MM[0,:] > 0))
+  
   #print 'split_mm_0'
   #get_mixed(M_s[0,:], MM_s[0,:])
   #print 'split_mm_1'
@@ -312,7 +335,7 @@ def merge_split(A, K, C, M, MM, G, S,
       M  = np.vstack([M, np.zeros(N_)])
       MM = np.vstack([MM, np.zeros(N_)])
       G_p = G
-      G = np.zeros((K+1,N_,3))
+      G = np.zeros((K+1,N_,4))
       G[:K,:,:] = G_p
       S = np.vstack([S, np.zeros(1)])
 
@@ -450,7 +473,7 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
   
     G_p = np.array(G[k_p,:,:])
     for j in np.nditer(np.nonzero(A[i_p,:] != 0)):
-      G_p[j,:] = score_beta_site(M_p[j], MM_p[j])
+      G_p[j,:] = score_beta_site(M_p[j], MM_p[j], alpha_v[j], beta_v[j])
   
     # set assignment to nil for now to resample hap
     C[i_p] = -1
@@ -468,7 +491,14 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
       n_k = np.sum(C == k)
       if n_k == 0:
         n = np.sum(m) + np.sum(mm)
-        scores[k] = np.log(DP_alpha) + n*(np.log(alpha) - np.log(alpha+beta))
+        mask = (m > 0) | (mm > 0)
+        scores[k] = (
+          np.log(DP_alpha) + 
+          np.sum(
+            np.log(alpha_v[mask]) - 
+            np.log(alpha_v[mask]+beta_v[mask])
+          )
+        )
         #n_k = DP_alpha
       elif k == k_p:
         scores[k] = np.log(n_k) + score_read(m, mm, M_p, MM_p)
@@ -480,8 +510,9 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
     # different betas
     log_scores = scores - logsumexp(scores)
     scores = np.exp(log_scores)
-    #print 'i_p', i_p
-    #print 'scores', scores
+    #if debug:
+    #  print 'i_p', i_p
+    #  print 'scores', scores
 
     assn = np.random.multinomial(1, scores)
     # take fixed transition path if specified
@@ -490,7 +521,6 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
     else:
       k_n = np.nonzero(assn == 1)[0][0]
     trans_logP += log_scores[k_n]
-
    
     # update haplotypes with new assignment 
     # move to new singleton clsuter
@@ -504,7 +534,7 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
       M = np.vstack([M, np.zeros(N_)])
       MM = np.vstack([MM, np.zeros(N_)])
       G_p = G
-      G = np.zeros((K+1,N_,3))
+      G = np.zeros((K+1,N_,4))
       G[:K,:,:] = G_p
       S = np.vstack([S, np.zeros(1)])
 
@@ -531,7 +561,7 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
       M[k_n,:]  = M[k_n,:] + m
       MM[k_n,:] = MM[k_n,:] + mm
       for j in np.nditer(np.nonzero(A[i_p,:] != 0)):
-        G[k_n,j,:] = score_beta_site(M[k_n,j], MM[k_n,j])
+        G[k_n,j,:] = score_beta_site(M[k_n,j], MM[k_n,j], alpha_v[j], beta_v[j])
 
       if np.sum(C == k_p) == 0:
         print 'occupancy of cluster {} empty, removing during gibbs scan'.format(k_p)
@@ -555,9 +585,47 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
 #--------------------------------------------------------------------------
 # phasing
 #--------------------------------------------------------------------------
-def phase(scratch_path, resume=False):
-  global G_seed
+def get_beta_priors(A, labels_map):
+  global alpha_v
+  global beta_v
 
+  M_, N_ = A.shape
+  PSEUDO_CNT_MAX = 0.05
+  PSEUDO_CNT_MAX = 0.0005
+  M = abs(np.sum((A > 0)*A, axis=0))
+  MM = abs(np.sum((A < 0)*A, axis=0))
+  N = M + MM
+  alpha_v = PSEUDO_CNT_MAX * M / N
+  beta_v  = PSEUDO_CNT_MAX * MM / N
+  # old prior
+  #alpha_v = np.ones(N_) * 0.1
+  #beta_v  = np.ones(N_) * 0.1
+  #alpha_v = np.ones(N_) * PSEUDO_CNT_MAX
+  #beta_v  = np.ones(N_) * PSEUDO_CNT_MAX
+  return
+
+  rid_cnts = np.sum(A != 0, axis=1)
+  rids = []
+  for rid, label in labels_map.items():
+    if label in ['NOTCH2NL-D.diploid', 'NOTCH2NL-D']:
+      rids.append(rid)
+  rids = np.array(rids)
+  _, crid = sorted(zip(rid_cnts[rids], rids), reverse=True)[0]
+  print 'N_', N_
+  print 'sorted', sorted(rid_cnts[rids], reverse=True)[:10]
+  print 'chosen rid', crid
+
+  alpha_v = np.zeros(N_)
+  beta_v = np.zeros(N_)
+  m = (A[crid,:] > 0)
+  mm = (A[crid,:] < 0)
+  unif = (A[crid,:] == 0)
+  alpha_v[unif] = 0.15 * 0.5
+  alpha_v[m] = 0.15 * 0.99
+  alpha_v[mm] = 0.15 * 0.01
+  beta_v = 0.15 - alpha_v
+
+def phase(scratch_path, resume=False):
   h5_path = os.path.join(scratch_path, 'inputs.h5')
   snps, bcodes, A, true_labels = util.load_phase_inputs(h5_path)
 
@@ -571,6 +639,8 @@ def phase(scratch_path, resume=False):
   true_labels_map = dict(enumerate(true_labels))
   bcodes_map = dict(enumerate(bcodes))
   snps_map = dict(enumerate(snps))
+
+  get_beta_priors(A, true_labels_map)
 
   M_, N_ = A.shape
 
@@ -588,22 +658,31 @@ def phase(scratch_path, resume=False):
   # initialize and save intermediate values for fast vectorized computation
   logP, M, MM, G, S = score(A, K, C)
 
-  # compute seed gammas for empty haplotype cluster
-  G_seed = np.zeros((N_, 3))
-  G_seed[:,0], G_seed[:,1], G_seed[:,2] = \
-    score_beta_site(np.zeros(N_), np.zeros(N_))
-
   assert_state(A, K, C, M, MM, G)
 
   C_samples = []
   print 'initial  accuracies', score_assignment(K, C, true_labels_map)
   for iteration in xrange(num_iterations):
 
-    #print 'iteration', iteration
+    print 'iteration', iteration
     if iteration % 50 == 0:
       print 'iteration', iteration
       print '  - accuracies'
       print score_assignment(K, C, true_labels_map)
+
+    if iteration % 20 == 0:
+      print 'scanning through and proposing split moves across clusters'
+      print score_assignment(K, C, true_labels_map)
+      for cidx in xrange(max(C)):
+        # cannot split singletons
+        if sum(C == cidx) < 2:
+          continue
+        taken, K, C, M, MM, G, S = merge_split(A, K, C, M, MM, G, S,
+          true_labels_map, bcodes_map, snps_map, split_idx=cidx)
+        if taken:
+          print 'took MH merge-split move'
+          print score_assignment(K, C, true_labels_map)
+          #die
 
     assert_state(A, K, C, M, MM, G)
     taken, K, C, M, MM, G, S = merge_split(A, K, C, M, MM, G, S,
@@ -620,6 +699,8 @@ def phase(scratch_path, resume=False):
     assert_state(A, K, C, M, MM, G)
 
     C_samples.append(np.array(C))
+    #if iteration > 40:
+    #  break
 
   assert_state(A, K, C, M, MM, G)
 
@@ -649,6 +730,8 @@ def make_outputs(inbam_path, scratch_path):
   idx_full_rid_map = dict(list(enumerate(full_bcodes)))
   idx_snp_map = dict(list(enumerate(snps)))
   M_, N_ = A.shape
+
+  get_beta_priors(A, None)
 
   # determine number of converged clusters
   Ks = map(lambda(x): np.max(x), C_samples)

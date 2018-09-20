@@ -145,6 +145,7 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
     # mix
     return c2 > 0.05 * c1 and not (c2 == 1 and c1 > 5)
 
+  MIN_ALLELE_COUNTS = 5
   pass_snps = []
   for record in vcf_fin:
     snp = (record.CHROM, record.POS - 1)
@@ -170,7 +171,8 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
       alt_calls, alt_mix,
     )
     if (
-      ref_calls >= 10 and alt_calls >= 10 and
+      ref_calls >= MIN_ALLELE_COUNTS and 
+      alt_calls >= MIN_ALLELE_COUNTS and
       ref_mix <= 0.05 * ref_calls and
       alt_mix <= 0.05 * alt_calls
     ):
