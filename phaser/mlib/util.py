@@ -74,6 +74,7 @@ def get_variants(vcf_path):
 #--------------------------------------------------------------------------
 # build/load input read X barcode matrix
 #--------------------------------------------------------------------------
+MIN_ALLELE_COUNTS = 5
 
 def load_phase_inputs(h5_path):
   h5f = h5py.File(h5_path, 'r')
@@ -145,7 +146,6 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
     # mix
     return c2 > 0.05 * c1 and not (c2 == 1 and c1 > 5)
 
-  MIN_ALLELE_COUNTS = 5
   pass_snps = []
   for record in vcf_fin:
     snp = (record.CHROM, record.POS - 1)
@@ -513,7 +513,7 @@ def get_normalized_genotypes(_A):
   A[A<0] = -1
   return A
 
-def subsample_reads(bcodes, A, true_labels, lim=15000):
+def subsample_reads(snps, bcodes, A, true_labels, lim=15000):
   # subsample most informative barcodes
   A_z = np.sum((A == 0), axis=1)
   s_idx = np.argsort(A_z)
@@ -521,10 +521,18 @@ def subsample_reads(bcodes, A, true_labels, lim=15000):
   #  print len(snps) - z, cnt
   A = A[s_idx,:][:lim,:]
 
+  # remove snps without enough supporting barcodes
+  M = np.sum(A==1, axis=0)
+  MM = np.sum(A==-1, axis=0)
+  mask = (M >= MIN_ALLELE_COUNTS) & (MM >= MIN_ALLELE_COUNTS)
+  print '  - dropped {} snps from subsampling'.format(sum(~mask))
+  A = A[:,mask]
+  snps = list(np.array(snps)[mask])
+
   last = min(lim, A.shape[0])-1
-  print 'min occupancy', A.shape[1] - A_z[s_idx][last]
+  print 'min occupancy', A.shape[1] - sum((A[last,:] == 0))
   bcodes = map(str, np.array(bcodes)[s_idx][:lim])
   true_labels = map(str, np.array(true_labels)[s_idx][:lim])
-  return bcodes, A, true_labels
+  return snps, bcodes, A, true_labels
 
 

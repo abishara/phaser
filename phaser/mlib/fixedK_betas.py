@@ -630,7 +630,13 @@ def phase(scratch_path, resume=False):
   snps, bcodes, A, true_labels = util.load_phase_inputs(h5_path)
 
   print 'loaded {} X {}'.format(len(bcodes), len(snps))
-  bcodes, A, true_labels = util.subsample_reads(bcodes, A, true_labels, lim=5000)
+  snps, bcodes, A, true_labels = util.subsample_reads(
+    snps,
+    bcodes,
+    A,
+    true_labels,
+    lim=5000,
+  )
   print '  - subsample to {} X {}'.format(len(bcodes), len(snps))
 
   # FIXME change to assert
@@ -723,7 +729,13 @@ def make_outputs(inbam_path, scratch_path):
   h5f.close()
 
   print 'loaded {} X {}'.format(len(full_bcodes), len(snps))
-  subs_bcodes, A, _ = util.subsample_reads(full_bcodes, full_A, full_bcodes, lim=5000)
+  snps, subs_bcodes, A, _ = util.subsample_reads(
+    snps,
+    full_bcodes,
+    full_A,
+    full_bcodes,
+    lim=5000,
+  )
   print '  - subsample to {} X {}'.format(len(subs_bcodes), len(snps))
 
   idx_sub_rid_map = dict(list(enumerate(subs_bcodes)))
