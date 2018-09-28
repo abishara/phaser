@@ -174,9 +174,19 @@ def merge_split(A, K, C, M, MM, G, S,
       i,j = j,i
     assert i != j
 
+  # debug split
   #tmp_rids = np.nonzero(C == 0)[0]
   #i = random.choice(filter(lambda(rid): true_labels_map[rid] == 'NOTCH2NL-D.diploid', tmp_rids))
   #j = random.choice(filter(lambda(rid): true_labels_map[rid] == 'NOTCH2NL-D', tmp_rids))
+  #print 'i,j', i,j
+  #print 'r_i label', true_labels_map[i]
+  #print 'r_j label', true_labels_map[j]
+
+  ## debug merge
+  #tmp_rids1 = np.nonzero(C == 4)[0]
+  #tmp_rids2 = np.nonzero(C == 5)[0]
+  #i = random.choice(filter(lambda(rid): true_labels_map[rid] == 'NOTCH2NL-B', tmp_rids1))
+  #j = random.choice(filter(lambda(rid): true_labels_map[rid] == 'NOTCH2NL-B', tmp_rids2))
   #print 'i,j', i,j
   #print 'r_i label', true_labels_map[i]
   #print 'r_j label', true_labels_map[j]
@@ -265,22 +275,28 @@ def merge_split(A, K, C, M, MM, G, S,
         x,y = y,x
       if x > 2:
         values.append((x,y))
-    print sorted(values)
-    print 'num mismatch', len(values)
-    print 'num all mismatch', np.sum(mask)
+    #print sorted(values)[:20]
+    #if len(values) > 20:
+    #  print '...'
+    #print 'num mismatch', len(values)
+    #print 'num all mismatch', np.sum(mask)
 
 
   #mask = (t_M[0,:] > 4) & (t_MM[0,:] > 4)
   ##N = t_M[0,:] + t_MM[0,:]
   ##print sorted(N[N>0])
+  #print 'number reads in proposed c0', sum(C==0)
+  #print 'number reads in proposed c1', sum(C==1)
   #print 'num mismatch sites', np.sum(mask)
   #print 'num nonzero sites', \
   #  np.sum((t_M[0,:] > 0) | (t_MM[0,:] > 0))
   
   #print 'split_mm_0'
   #get_mixed(M_s[0,:], MM_s[0,:])
+  #print 'num zero', np.sum((M_s[0,:] == 0) & (MM_s[0,:] == 0))
   #print 'split_mm_1'
   #get_mixed(M_s[1,:], MM_s[1,:])
+  #print 'num zero', np.sum((M_s[1,:] == 0) & (MM_s[1,:] == 0))
   #print 'merge_mm  '
   #get_mixed(t_M[0,:], t_MM[0,:])
   #print 'num zero', np.sum((t_M[0,:] == 0) & (t_MM[0,:] == 0))
@@ -375,8 +391,15 @@ def merge_split(A, K, C, M, MM, G, S,
     acc_log_ll = np.sum(logPs_merge) - np.sum(logPs_split)
     acc_log_trans = trans_logP
 
-
     acc = min(1, np.exp(acc_log_prior + acc_log_ll + acc_log_trans))
+
+    #print 'logPs_split  ', logPs_split
+    #print 'logPs_merge  ', logPs_merge
+    #print 'acc_log_prior', acc_log_prior
+    #print 'acc_log_ll   ', acc_log_ll
+    #print 'acc_log_trans', acc_log_trans
+    #print 'acc', acc
+    #die
 
     if random.random() <= acc:
       print 'merge taken! between {} and {}'.format(c_i, c_j)
@@ -736,11 +759,19 @@ def make_outputs(inbam_path, scratch_path):
     full_bcodes,
     lim=5000,
   )
+
+
   print '  - subsample to {} X {}'.format(len(subs_bcodes), len(snps))
 
   idx_sub_rid_map = dict(list(enumerate(subs_bcodes)))
   idx_full_rid_map = dict(list(enumerate(full_bcodes)))
-  idx_snp_map = dict(list(enumerate(snps)))
+
+  # FIXME total hack for now just to get it to run, and will not bother to
+  # recover any barcodes taht are not subsampled
+  full_A = A
+  idx_full_rid_map = dict(list(enumerate(subs_bcodes)))
+  # END FIXME remove
+
   M_, N_ = A.shape
 
   get_beta_priors(A, None)

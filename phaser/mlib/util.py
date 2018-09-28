@@ -231,8 +231,13 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
       elif ac > rc:
         A[i,j] = ac
 
-  pass_snps_vec = np.array(pass_snps)
-  pass_bcodes_vec = np.array(pass_bcodes)
+  # remove reads that do not have any snp calls
+  mask = (np.sum(np.abs(A), axis=1) != 0)
+  assert len(mask) == len(pass_bcodes)
+  assert len(mask) == len(true_labels)
+  A = A[mask,:]
+  pass_bcodes = list(np.array(pass_bcodes)[mask])
+  true_labels = list(np.array(true_labels)[mask])
 
   print '{} bcodes X {} snps'.format(M, N)
   print 'total genotype entries {}'.format(np.sum(np.abs(A)))
@@ -524,7 +529,8 @@ def subsample_reads(snps, bcodes, A, true_labels, lim=15000):
   # remove snps without enough supporting barcodes
   M = np.sum(A==1, axis=0)
   MM = np.sum(A==-1, axis=0)
-  mask = (M >= MIN_ALLELE_COUNTS) & (MM >= MIN_ALLELE_COUNTS)
+  mask = (M > 0) & (MM > 0)
+  #mask = (M >= MIN_ALLELE_COUNTS) & (MM >= MIN_ALLELE_COUNTS)
   print '  - dropped {} snps from subsampling'.format(sum(~mask))
   A = A[:,mask]
   snps = list(np.array(snps)[mask])
