@@ -83,7 +83,7 @@ def load_phase_inputs(h5_path):
   true_labels = map(lambda(k): str(k), h5f['true_labels'])
   A = np.array(h5f['genotypes'])
   h5f.close()
-  A = get_normalized_genotypes(A)
+  #A = get_normalized_genotypes(A)
   return snps, bcodes, A, true_labels
 
 def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
@@ -93,7 +93,8 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
   bam_fin = pysam.Samfile(bam_path, 'rb')
   snp_bcode_counts_map = defaultdict(lambda:defaultdict(Counter))
   seen_set = set()
-  bcode_label_map = defaultdict(lambda:None)
+  bcode_label_map = defaultdict(lambda:0)
+  all_bcodes = set()
   for (i, target_snp) in enumerate(sorted(var_map)):
     (ctg, pos) = target_snp
     #if ctg in ['contig-100_6', 'contig-100_10']:
@@ -123,6 +124,7 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
         # skip gapped alignment positions
         if read.is_del or read.is_refskip:
           continue
+        all_bcodes.add(bcode)
         snp = (ctg, pcol.pos)
         allele = str(read.alignment.query_sequence[read.query_position]).lower()
         snp_bcode_counts_map[snp][bcode][allele] += 1
@@ -181,36 +183,12 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
     else:
       filt_vcf_fout.write_record(record)
 
-  # filter for barcodes covering >1 informative snp
-  # remove mixed calls from barcodes
-  pass_snps_set = set(pass_snps)
-  bcode_snp_counts = Counter()
-  for snp, bcode_counts_map in snp_bcode_counts_map.items():
-    if snp not in pass_snps_set:
-      continue
-    for bcode, counts in bcode_counts_map.items():
-      ra, aa = var_map[snp]
-      rc, ac = counts[ra], counts[aa]
-      if not is_mix(rc, ac) and (rc > 0 or ac > 0):
-        bcode_snp_counts[bcode] += 1
-
-  true_labels = []
-  pass_bcodes = []
-  for bcode, cnt in bcode_snp_counts.most_common():
-    # skip if barcode not in subset specified
-    if bcodes and bcode not in bcodes:
-      continue
-    if cnt > 1:
-      pass_bcodes.append(bcode)
-      if bcode_label_map[bcode]:
-        true_labels.append(bcode_label_map[bcode])
-      else:
-        true_labels.append(0)
-  pass_bcodes_set = set(pass_bcodes)
+  pass_bcodes = list(all_bcodes)
+  true_labels = map(lambda(b): bcode_label_map[b], pass_bcodes)
 
   # create input matrix
   idx_snp_map = dict(list(enumerate(pass_snps)))
-  idx_rid_map = dict(list(enumerate(pass_bcodes)))
+  idx_rid_map = dict(list(enumerate(all_bcodes)))
   snp_idx_map = dict(map(lambda(k,v): (v,k), idx_snp_map.items()))
   rid_idx_map = dict(map(lambda(k,v): (v,k), idx_rid_map.items()))
   M = len(rid_idx_map)
@@ -219,8 +197,8 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
   for j, snp in idx_snp_map.items():
     ref_allele, alt_allele = var_map[snp]
     for bcode, counts in snp_bcode_counts_map[snp].items():
-      if bcode not in pass_bcodes_set:
-        continue
+      #if bcode not in pass_bcodes_set:
+      #  continue
       i = rid_idx_map[bcode]
       rc, ac = (counts[ref_allele], counts[alt_allele])
       # skip mixed
@@ -231,13 +209,19 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
       elif ac > rc:
         A[i,j] = ac
 
-  # remove reads that do not have any snp calls
-  mask = (np.sum(np.abs(A), axis=1) != 0)
-  assert len(mask) == len(pass_bcodes)
-  assert len(mask) == len(true_labels)
+  A = get_normalized_genotypes(A)
+  # snps must have at least four supporting barcodes
+  mask = (np.sum(np.abs(A), axis=0) > 3)
+  A = A[:,mask]
+  pass_snps = list(np.array(pass_snps)[mask])
+  print '  - dropped {} snps with < 4 supporting barcodes'.format(np.sum(~mask))
+
+  # include only reads with at least two snps
+  mask = (np.sum(np.abs(A), axis=1) > 1)
   A = A[mask,:]
   pass_bcodes = list(np.array(pass_bcodes)[mask])
   true_labels = list(np.array(true_labels)[mask])
+  print '  - dropped {} barcodes not overlapping >= 2 hets'.format(np.sum(~mask))
 
   print '{} bcodes X {} snps'.format(M, N)
   print 'total genotype entries {}'.format(np.sum(np.abs(A)))
@@ -525,15 +509,6 @@ def subsample_reads(snps, bcodes, A, true_labels, lim=15000):
   #for z, cnt in sorted(Counter(A_z).items(), reverse=True):
   #  print len(snps) - z, cnt
   A = A[s_idx,:][:lim,:]
-
-  # remove snps without enough supporting barcodes
-  M = np.sum(A==1, axis=0)
-  MM = np.sum(A==-1, axis=0)
-  mask = (M > 0) & (MM > 0)
-  #mask = (M >= MIN_ALLELE_COUNTS) & (MM >= MIN_ALLELE_COUNTS)
-  print '  - dropped {} snps from subsampling'.format(sum(~mask))
-  A = A[:,mask]
-  snps = list(np.array(snps)[mask])
 
   last = min(lim, A.shape[0])-1
   print 'min occupancy', A.shape[1] - sum((A[last,:] == 0))

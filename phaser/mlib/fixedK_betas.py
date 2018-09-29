@@ -627,34 +627,12 @@ def get_beta_priors(A, labels_map):
   #beta_v  = np.ones(N_) * PSEUDO_CNT_MAX
   return
 
-  rid_cnts = np.sum(A != 0, axis=1)
-  rids = []
-  for rid, label in labels_map.items():
-    if label in ['NOTCH2NL-D.diploid', 'NOTCH2NL-D']:
-      rids.append(rid)
-  rids = np.array(rids)
-  _, crid = sorted(zip(rid_cnts[rids], rids), reverse=True)[0]
-  print 'N_', N_
-  print 'sorted', sorted(rid_cnts[rids], reverse=True)[:10]
-  print 'chosen rid', crid
-
-  alpha_v = np.zeros(N_)
-  beta_v = np.zeros(N_)
-  m = (A[crid,:] > 0)
-  mm = (A[crid,:] < 0)
-  unif = (A[crid,:] == 0)
-  alpha_v[unif] = 0.15 * 0.5
-  alpha_v[m] = 0.15 * 0.99
-  alpha_v[mm] = 0.15 * 0.01
-  beta_v = 0.15 - alpha_v
-
 def phase(scratch_path, resume=False):
   h5_path = os.path.join(scratch_path, 'inputs.h5')
   snps, bcodes, A, true_labels = util.load_phase_inputs(h5_path)
 
   print 'loaded {} X {}'.format(len(bcodes), len(snps))
-  snps, bcodes, A, true_labels = util.subsample_reads(
-    snps,
+  bcodes, A, true_labels = util.subsample_reads(
     bcodes,
     A,
     true_labels,
@@ -752,8 +730,7 @@ def make_outputs(inbam_path, scratch_path):
   h5f.close()
 
   print 'loaded {} X {}'.format(len(full_bcodes), len(snps))
-  snps, subs_bcodes, A, _ = util.subsample_reads(
-    snps,
+  subs_bcodes, A, _ = util.subsample_reads(
     full_bcodes,
     full_A,
     full_bcodes,
