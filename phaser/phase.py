@@ -13,11 +13,14 @@ def phase_barcodes(
   vcf_path,
   scratch_path,
   bcodes=None,
+  sms=False,
 ):
   # FIXME create TMPDIR if none specified
   assert scratch_path != None
 
   util.mkdir_p(scratch_path)
+
+  util.set_sms(sms)
 
   inputs_path = os.path.join(scratch_path, 'inputs.h5')
   phased_path = os.path.join(scratch_path, 'phased.h5')
@@ -54,6 +57,7 @@ def main():
     'resume',
   ]
 
+  #util.set_sms(True)
   util.mkdir_p(scratch_path)
   if cmd == 'mkinputs':
     util.make_inputs(bam_path, vcf_path, scratch_path)

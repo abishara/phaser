@@ -42,7 +42,7 @@ def get_label(read):
     label = filt_list[0][1].strip()
     return label
 
-def get_barcode(read):
+def get_barcode_rc(read):
   filt_list = filter(lambda(k, v): k in ['BC', 'BX'], read.tags)
   assert len(filt_list) <= 1
   if filt_list == []: 
@@ -50,6 +50,15 @@ def get_barcode(read):
   else:
     barcodepre = filt_list[0][1].strip()
     return barcodepre
+
+def get_barcode_sms(read):
+  return read.qname
+
+get_barcode = get_barcode_rc
+
+def set_sms(sms_on):
+  global get_barcode
+  get_barcode = get_barcode_sms if sms_on else get_barcode_rc
 
 #--------------------------------------------------------------------------
 # vcf processing
@@ -212,6 +221,8 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
   A = get_normalized_genotypes(A)
   # snps must have at least four supporting barcodes
   mask = (np.sum(np.abs(A), axis=0) > 3)
+  ## FIXME tmp
+  #mask = (np.sum(np.abs(A), axis=0) > 1)
   A = A[:,mask]
   pass_snps = list(np.array(pass_snps)[mask])
   print '  - dropped {} snps with < 4 supporting barcodes'.format(np.sum(~mask))
@@ -222,6 +233,14 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
   pass_bcodes = list(np.array(pass_bcodes)[mask])
   true_labels = list(np.array(true_labels)[mask])
   print '  - dropped {} barcodes not overlapping >= 2 hets'.format(np.sum(~mask))
+
+  # snps must have ref and alt barcode calls
+  mref = (np.sum((A == -1), axis=0) > 0)
+  malt = (np.sum((A ==  1), axis=0) > 0)
+  mask = mref & malt
+  A = A[:,mask]
+  pass_snps = list(np.array(pass_snps)[mask])
+  print '  - dropped {} snps without het barcode calls'.format(np.sum(~mask))
 
   print '{} bcodes X {} snps'.format(M, N)
   print 'total genotype entries {}'.format(np.sum(np.abs(A)))
@@ -502,18 +521,16 @@ def get_normalized_genotypes(_A):
   A[A<0] = -1
   return A
 
-def subsample_reads(snps, bcodes, A, true_labels, lim=15000):
+def subsample_reads(bcodes, A, true_labels, lim=15000):
   # subsample most informative barcodes
   A_z = np.sum((A == 0), axis=1)
   s_idx = np.argsort(A_z)
-  #for z, cnt in sorted(Counter(A_z).items(), reverse=True):
-  #  print len(snps) - z, cnt
   A = A[s_idx,:][:lim,:]
 
   last = min(lim, A.shape[0])-1
   print 'min occupancy', A.shape[1] - sum((A[last,:] == 0))
   bcodes = map(str, np.array(bcodes)[s_idx][:lim])
   true_labels = map(str, np.array(true_labels)[s_idx][:lim])
-  return snps, bcodes, A, true_labels
+  return bcodes, A, true_labels
 
 

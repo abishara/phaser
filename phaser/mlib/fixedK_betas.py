@@ -102,6 +102,13 @@ def score(A, K, C, debug=False):
         alpha_v[j],
         beta_v[j],
       )
+      S_kj = (
+        np.sum(G[k,j,3]) + 
+        np.sum(G[k,j,0]) + 
+        np.sum(G[k,j,1]) -
+        np.sum(G[k,j,2])
+      )
+      assert S_kj <= 0
     S[k] = (
       np.sum(G[k,:,3]) + 
       np.sum(G[k,:,0]) + 
@@ -630,7 +637,7 @@ def get_beta_priors(A, labels_map):
 def phase(scratch_path, resume=False):
   h5_path = os.path.join(scratch_path, 'inputs.h5')
   snps, bcodes, A, true_labels = util.load_phase_inputs(h5_path)
-
+  
   print 'loaded {} X {}'.format(len(bcodes), len(snps))
   bcodes, A, true_labels = util.subsample_reads(
     bcodes,
@@ -639,6 +646,7 @@ def phase(scratch_path, resume=False):
     lim=5000,
   )
   print '  - subsample to {} X {}'.format(len(bcodes), len(snps))
+
 
   # FIXME change to assert
   print 'number nonzero', np.sum(np.any((A != 0), axis=1))
