@@ -253,60 +253,55 @@ def make_inputs(bam_path, vcf_path, scratch_path, bcodes=None):
   h5f.create_dataset('true_labels', data=true_labels)
   h5f.close()
 
-def make_inputs_toy(d1, d2, scratch_path):
-#def make_inputs_toy(d1, d2, scratch_path):
-  # toy example
-  pass_snps = [
-    ('snp0',0),
-    ('snp1',0),
-    ('snp2',0),
-    ('snp3',0),
-    ('snp4',0),
-  ]
-  #pass_bcodes = [
-  #  'bcode0',
-  #  'bcode1',
-  #  'bcode2',
-  #  'bcode3',
-  #  'bcode4',
-  #]
-  #A = np.array([
-  #[-1,1,1,1,1],
-  #[1,-1,1,1,1],
-  #[1,1,-1,1,1],
-  #[1,1,1,-1,1],
-  #[1,1,1,1,-1],
-  #])
-  #true_labels = [
-  #  'c0',
-  #  'c1',
-  #  'c2',
-  #  'c3',
-  #  'c4',
-  #]
-  pass_bcodes = [
-    'bcode0',
-    'bcode1',
-    'bcode2',
-    'bcode3',
-    'bcode4',
-    'bcode5',
-    'bcode6',
-    'bcode7',
-    'bcode8',
-    'bcode9',
+def make_inputs_toy(
+  M = 400,
+  N = 1000,
+  #N = 2000,
+  #mm = 1000,
+  mm = 20,
+  sparsity = 0,
+  #err = 0.00,
+  err = 0.01,
+):
 
-    'bcode15',
-    'bcode16',
-    'bcode17',
-    'bcode18',
-    'bcode19',
-    'bcode25',
-    'bcode26',
-    'bcode27',
-    'bcode28',
-    'bcode29',
-  ]
+  assert mm < N
+  assert sparsity < 1 and sparsity >= 0
+
+  mid = int(M/2)
+
+  A_1 = np.zeros(N)
+  A_2 = np.array(A_1)
+  A_2[0:mm] = 1
+
+  # draw reads
+  A = np.random.random_sample((M, N))
+  mask = (A < err)
+  A[mask]  = 1
+  A[~mask] = -1
+
+  # flip bottom half of reads that are supposed to match the alternate
+  # allele
+  fmask = (A[mid:,:mm] == 1)
+  A[mid:,:mm][fmask]  = -1
+  A[mid:,:mm][~fmask] = 1
+
+  # impose sparsity
+  num_mask = int(sparsity * A.size)
+  smask = np.full(A.size, False)
+  smask[:num_mask] = True
+  np.random.shuffle(smask)
+  smask = smask.reshape((M,N))
+
+  pass_snps = map(lambda(i): ('ctg', i), xrange(N))
+  pass_bcodes = map(lambda(i): 'bcode{}'.format(i), xrange(M))
+  true_labels = ['c0'] * mid
+  true_labels.extend(['c1'] * (M - mid))
+  
+  return A, pass_snps, pass_bcodes, true_labels,
+
+
+def make_inputs_toy2(d1, d2, scratch_path):
+  # toy example
   A = np.array([
   [-1,1,1,1,1],
   [1,-1,1,1,1],
@@ -330,6 +325,9 @@ def make_inputs_toy(d1, d2, scratch_path):
   [1,1,1,-1,1],
   [1,1,1,1,-1],
   ])
+  M, N = A.shape
+  pass_snps = map(lambda(i): ('ctg', i), xrange(N))
+  pass_bcodes = map(lambda(i): 'bcode{}'.format(i), xrange(M))
   true_labels = [
     'c0',
     'c1',
@@ -362,27 +360,8 @@ def make_inputs_toy(d1, d2, scratch_path):
   h5f.create_dataset('true_labels', data=true_labels)
   h5f.close()
 
-def make_inputs_toy2(d1, d2, scratch_path):
+def make_inputs_toy3(d1, d2, scratch_path):
   # toy example
-  pass_snps = [
-    ('snp0',0),
-    ('snp1',0),
-    ('snp2',0),
-    ('snp3',0),
-    ('snp4',0),
-  ]
-  pass_bcodes = [
-    'bcode0',
-    'bcode1',
-    'bcode2',
-    'bcode3',
-    'bcode4',
-    'bcode5',
-    'bcode6',
-    'bcode7',
-    'bcode8',
-    'bcode9',
-  ]
   A = np.array([
   [-1,1,1,1,1],
   [-1,1,1,1,1],
@@ -396,6 +375,9 @@ def make_inputs_toy2(d1, d2, scratch_path):
   [1,-1,1,1,1],
   [1,-1,1,1,1],
   ])
+  M, N = A.shape
+  pass_snps = map(lambda(i): ('ctg', i), xrange(N))
+  pass_bcodes = map(lambda(i): 'bcode{}'.format(i), xrange(M))
   true_labels = [
     'c0',
     'c0',

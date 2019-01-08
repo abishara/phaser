@@ -28,6 +28,8 @@ alpha_v, beta_v = None, None
 
 num_iterations = 400
 
+np.set_printoptions(threshold=10)
+
 #--------------------------------------------------------------------------
 # temporary stuff to score simulation moves
 #--------------------------------------------------------------------------
@@ -182,12 +184,12 @@ def merge_split(A, K, C, M, MM, G, S,
     assert i != j
 
   # debug split
-  #tmp_rids = np.nonzero(C == 0)[0]
-  #i = random.choice(filter(lambda(rid): true_labels_map[rid] == 'NOTCH2NL-D.diploid', tmp_rids))
-  #j = random.choice(filter(lambda(rid): true_labels_map[rid] == 'NOTCH2NL-D', tmp_rids))
-  #print 'i,j', i,j
-  #print 'r_i label', true_labels_map[i]
-  #print 'r_j label', true_labels_map[j]
+  tmp_rids = np.nonzero(C == 0)[0]
+  i = random.choice(filter(lambda(rid): true_labels_map[rid] == 'c0', tmp_rids))
+  j = random.choice(filter(lambda(rid): true_labels_map[rid] == 'c1', tmp_rids))
+  print 'i,j', i,j
+  print 'r_i label', true_labels_map[i]
+  print 'r_j label', true_labels_map[j]
 
   ## debug merge
   #tmp_rids1 = np.nonzero(C == 4)[0]
@@ -256,8 +258,8 @@ def merge_split(A, K, C, M, MM, G, S,
   for nrid, rid in enumerate(sel_rids):
     labels_remap[nrid] = true_labels_map[rid]
 
-  #print 'pre local gibbs'
-  #get_labels(C_s)
+  print 'pre local gibbs'
+  get_labels(C_s)
   for local_iteration in xrange(8):
     tlogP, _, C_s, M_s, MM_s, G_s, S_s = \
       gibbs_scan(A_s, 2, C_s, M_s, MM_s, G_s, S_s, fixed_rids=fixed_rids,
@@ -266,8 +268,8 @@ def merge_split(A, K, C, M, MM, G, S,
       )
   C_launch = np.array(C_s)
 
-  #print 'post local gibbs'
-  #get_labels(C_launch)
+  print 'post local gibbs'
+  get_labels(C_launch)
 
   ## FIXME remove
   #for nrid, (rid, assn) in enumerate(zip(sel_rids, C_launch)):
@@ -331,13 +333,14 @@ def merge_split(A, K, C, M, MM, G, S,
 
     acc = min(1, np.exp(acc_log_prior + acc_log_ll + acc_log_trans))
 
-    #print 'logPs_split  ', logPs_split
-    #print 'logPs_merge  ', logPs_merge
-    #print 'acc_log_prior', acc_log_prior
-    #print 'acc_log_ll   ', acc_log_ll
-    #print 'acc_log_trans', acc_log_trans
-    #print 'acc', acc
-    #die
+    print 'counts', n_ci, n_cj
+    print 'logPs_split  ', logPs_split
+    print 'logPs_merge  ', logPs_merge
+    print 'acc_log_prior', acc_log_prior
+    print 'acc_log_ll   ', acc_log_ll
+    print 'acc_log_trans', acc_log_trans
+    print 'acc', acc
+    die
     if random.random() <= acc and min(n_ci, n_cj) > 0:
       taken = True
       print 'splitting cluster', C[i]
@@ -521,21 +524,53 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
       n_k = np.sum(C == k)
       if n_k == 0:
         n = np.sum(m) + np.sum(mm)
-        mask = (m > 0) | (mm > 0)
+        mask0 = (m > 0)
+        mask1 = (mm > 0)
+        assert np.any(mask0 & mask1) == False
         scores[k] = (
           np.log(DP_alpha) + 
           np.sum(
-            np.log(alpha_v[mask]) - 
-            np.log(alpha_v[mask]+beta_v[mask])
-          )
+            np.log(alpha_v[mask0]) - 
+            np.log(alpha_v[mask0]+beta_v[mask0])
+          ) +
+          np.sum(
+            np.log(beta_v[mask1]) - 
+            np.log(alpha_v[mask1]+beta_v[mask1])
+          ) 
         )
         #n_k = DP_alpha
       elif k == k_p:
         scores[k] = np.log(n_k) + score_read(m, mm, M_p, MM_p)
+        #if i_p == 1:
+        #  print 'prev cluster', k
+        #  print '  - n_k', n_k
+        #  print '  - m      ', m
+        #  print '  - mm     ', mm
+        #  print '  - M_p ', M_p
+        #  print '  - MM_p', MM_p
+        #  print '  - scores[k]', scores[k]
       else:
         #assert n_k>0, "i_p {}".format(i_p)
         scores[k] = np.log(n_k) + score_read(m, mm, M[k,:], MM[k,:])
+        if i_p == 1:
+          print 'other cluster', k
+          print '  - n_k', n_k
+          print '  - m      ', m
+          print '  - mm     ', mm
+          print '  - M[k,:] ', M[k,:]
+          print '  - MM[k,:]', MM[k,:]
+          print '  - scores[k]', scores[k]
+          val = score_read(m, mm, M[k,:], MM[k,:], debug=True)
+          #print 'val', val
+          #die
+
+      if i_p == 1:
+        print 'k', k
+        print 'n_k', n_k
+        print 'scores[k]', scores[k]
   
+    if i_p == 1:
+      die
     # pick new cluster with prob proportional to scores under K
     # different betas
     log_scores = scores - logsumexp(scores)
@@ -551,6 +586,10 @@ def gibbs_scan(A, K, C, M, MM, G, S, trans_path=None, fixed_rids=None,
     else:
       k_n = np.nonzero(assn == 1)[0][0]
     trans_logP += log_scores[k_n]
+    #print 'k_p   ', k_p
+    #print 'k_n   ', k_n
+    #print 'scores', scores
+    #die
    
     # update haplotypes with new assignment 
     # move to new singleton clsuter
@@ -620,19 +659,67 @@ def get_beta_priors(A, labels_map):
   global beta_v
 
   M_, N_ = A.shape
+  PSEUDO_CNT_MAX = 0.005
   PSEUDO_CNT_MAX = 0.05
   PSEUDO_CNT_MAX = 0.0005
   M = abs(np.sum((A > 0)*A, axis=0))
   MM = abs(np.sum((A < 0)*A, axis=0))
   N = M + MM
-  alpha_v = PSEUDO_CNT_MAX * M / N
-  beta_v  = PSEUDO_CNT_MAX * MM / N
+  alpha_v = PSEUDO_CNT_MAX * (M+1)  / (N+1)
+  beta_v  = PSEUDO_CNT_MAX * (MM+1) / (N+1)
   # old prior
   #alpha_v = np.ones(N_) * 0.1
   #beta_v  = np.ones(N_) * 0.1
-  #alpha_v = np.ones(N_) * PSEUDO_CNT_MAX
-  #beta_v  = np.ones(N_) * PSEUDO_CNT_MAX
+  # FIXME remove
+  alpha_v = np.ones(N_) * 0.5 * PSEUDO_CNT_MAX
+  beta_v  = np.ones(N_) * 0.5 * PSEUDO_CNT_MAX
   return
+
+def test_phase():
+  A, snps, bcodes, true_labels = util.make_inputs_toy()
+
+  true_labels_map = dict(enumerate(true_labels))
+  bcodes_map = dict(enumerate(bcodes))
+  snps_map = dict(enumerate(snps))
+
+  get_beta_priors(A, true_labels_map)
+
+  M_, N_ = A.shape
+
+  #K, C = util.get_initial_state(A, true_labels_map)
+  K = 2
+  C = np.zeros(M_,dtype=np.int)
+  #C[int(M_/2):] = 1
+  C[:1] = 1
+
+  logP, M, MM, G, S = score(A, K, C)
+
+  #print 'here'
+  #global alpha_v
+  #global beta_v
+  #PSEUDO_CNT_MAX = 0.0005
+  #alpha_v = np.ones(2) * 0.5 * PSEUDO_CNT_MAX
+  #beta_v  = np.ones(2) * 0.5 * PSEUDO_CNT_MAX
+  #print score_read(
+  #  np.array([0,0]),
+  #  np.array([1,1]),
+  #  np.array([0,0]),
+  #  np.array([1,1]),
+  #)
+  #die
+
+  print 'init accuracies', score_assignment(K, C, true_labels_map)
+  _, K, C, M, MM, G, S = \
+    gibbs_scan(A, K, C, M, MM, G, S, fixed_rids=[0, 399], l=true_labels_map)
+  print 'post accuracies', score_assignment(K, C, true_labels_map)
+
+  ##print 'sum M', np.sum(M, axis=0)
+  ##print 'sum MM', np.sum(MM, axis=0)
+  ##die
+  #assert_state(A, K, C, M, MM, G)
+  #taken, K, C, M, MM, G, S = merge_split(A, K, C, M, MM, G, S,
+  #  true_labels_map, bcodes_map, snps_map)
+
 
 def phase(scratch_path, resume=False):
   h5_path = os.path.join(scratch_path, 'inputs.h5')
